@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import * as Matter from "matter-js"
 
 type Stats = {
@@ -191,12 +192,16 @@ export default function GameCanvas() {
   const [dropImpact, setDropImpact] = useState(false)
   const [showFeedback, setShowFeedback] = useState(false)
   const [statsPopUpReady, setStatsPopUpReady] = useState(false)
-  const [isCompact, setIsCompact] = useState(false)
-  const [viewportWidth, setViewportWidth] = useState(GAME.width + 40)
-  const [viewportHeight, setViewportHeight] = useState(900)
+  const [rulesPopUpReady, setRulesPopUpReady] = useState(false)
+  const isCompact = false
 
   const [soundEnabled, setSoundEnabled] = useState(() => {
     return getStorageItem("orbidropSoundEnabled") !== "false"
+  })
+
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof document === "undefined") return false
+    return document.documentElement.dataset.theme === "dark"
   })
 
   const [actionButtonPressed, setActionButtonPressed] = useState(false)
@@ -242,6 +247,52 @@ export default function GameCanvas() {
     if (soundEnabled) audioCtxRef.current.resume().catch(() => {})
     else audioCtxRef.current.suspend().catch(() => {})
   }, [soundEnabled])
+
+  useEffect(() => {
+    const theme = darkMode ? "dark" : "light"
+    document.documentElement.dataset.theme = theme
+    try {
+      setStorageItem("orbifallDarkMode", theme)
+    } catch {}
+  }, [darkMode])
+
+  const theme = darkMode
+    ? {
+        text: "#e5e5e5",
+        muted: "#9ca3af",
+        muted2: "#6b7280",
+        card: "#1f1f1f",
+        cardLight: "#262626",
+        cardLighter: "#2d2d2d",
+        glass: "linear-gradient(to bottom,#252525 0%, #1f1f1f 55%, #1a1a1a 100%)",
+        glassHighlight: "rgba(255,255,255,0.04)",
+        border: "rgba(255,255,255,0.08)",
+        modal: "#1a1a1a",
+        modalText: "#e5e5e5",
+        modalMuted: "#9ca3af",
+        overlay: "rgba(0,0,0,0.75)",
+        buttonMuted: "#374151",
+        feedbackText: "#fff",
+        divider: "rgba(255,255,255,0.06)"
+      }
+    : {
+        text: "#171717",
+        muted: "#666",
+        muted2: "#777",
+        card: "#f7f8fa",
+        cardLight: "#f1f3f5",
+        cardLighter: "#e9ecef",
+        glass: "linear-gradient(to bottom,#ffffff 0%, #f7f8fb 55%, #f1f3f5 100%)",
+        glassHighlight: "rgba(255,255,255,0.06)",
+        border: "rgba(0,0,0,0.06)",
+        modal: "#ffffff",
+        modalText: "#171717",
+        modalMuted: "#666",
+        overlay: "rgba(0,0,0,0.55)",
+        buttonMuted: "#e9ecef",
+        feedbackText: "#000",
+        divider: "rgba(0,0,0,0.06)"
+      }
 
   const playClickSound = () => {
     withAudioContext(ctx => {
@@ -343,7 +394,12 @@ export default function GameCanvas() {
 
     if (now - lastHapticAtRef.current < minGapMs) return
     lastHapticAtRef.current = now
-    navigator.vibrate(pattern)
+
+    try {
+      navigator.vibrate(pattern)
+    } catch {
+      // Some browsers/devices may throw; ignore
+    }
   }
 
   const [playerId] = useState(() => getOrCreatePlayerId())
@@ -354,24 +410,8 @@ export default function GameCanvas() {
   const earthWinSeenKey = `orbidropEarthWinSeen:${todayKey}`
   const forceEarthEveryRun = getStorageItem("orbidropForceEarthEveryRun") === "true"
 
-  useEffect(() => {
-    const updateCompact = () => {
-      const w = window.innerWidth
-      const h = window.innerHeight
-      const compact = w <= 430 || h <= 760
-      setViewportWidth(w)
-      setViewportHeight(h)
-      setIsCompact(compact)
-    }
-    updateCompact()
-    window.addEventListener("resize", updateCompact)
-    return () => window.removeEventListener("resize", updateCompact)
-  }, [])
-
-  const compactWidth = Math.max(286, Math.min(320, viewportWidth - 20))
-  const playfieldWidth = isCompact ? compactWidth : GAME.width
-  const compactHeight = Math.max(410, Math.min(500, viewportHeight - 260))
-  const playfieldHeight = isCompact ? compactHeight : GAME.height
+  const playfieldWidth = GAME.width
+  const playfieldHeight = GAME.height
 
   useEffect(() => {
     let cancelled = false
@@ -445,6 +485,19 @@ export default function GameCanvas() {
   }, [showStats])
 
   useEffect(() => {
+    if (!showRules) {
+      setRulesPopUpReady(false)
+      return
+    }
+
+    setRulesPopUpReady(false)
+    const raf = requestAnimationFrame(() => {
+      setRulesPopUpReady(true)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [showRules])
+
+  useEffect(() => {
     return () => {
       if (countRafRef.current !== null) {
         cancelAnimationFrame(countRafRef.current)
@@ -479,12 +532,15 @@ export default function GameCanvas() {
     const engine = Engine.create()
     engineRef.current = engine
 
+    const pixelRatio = typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1
+
     const render = Render.create({
       element: sceneRef.current!,
       engine: engine,
       options: {
         width: playfieldWidth,
         height: playfieldHeight,
+        pixelRatio,
         wireframes: false,
         background: "transparent"
       }
@@ -731,7 +787,7 @@ useEffect(() => {
     setTimeout(() => setDropImpact(false), 320)
 
     playClickSound()
-    triggerHaptic("press")
+    triggerHaptic("press") // fallback for keyboard
     setGameFinished(false)
     setIsCounting(false)
     setCountDisplay(0)
@@ -788,7 +844,7 @@ useEffect(() => {
 
     // Impact moment: stop new spawns immediately, then reveal the result after a short pause
     playClickSound()
-    triggerHaptic("stop")
+    triggerHaptic("stop") // fallback for keyboard
     setRunning(false)
     setStopImpact(true)
     setTimeout(() => setStopImpact(false), 320)
@@ -1031,12 +1087,12 @@ const revealStyle = gameFinished
 
   const countingDiff = isCounting ? Math.abs(countDisplay - target) : null
   const countingDiffColor =
-    countingDiff === null ? "#111" : diffToColor(countingDiff)
+    countingDiff === null ? theme.text : diffToColor(countingDiff)
 
   const hasResultNumbers = isCounting || gameFinished
   const finishedDiff = gameFinished ? Math.abs(ballCount - target) : null
   const finishedDiffColor =
-    finishedDiff === null ? "#111" : diffToColor(finishedDiff)
+    finishedDiff === null ? theme.text : diffToColor(finishedDiff)
   const hasBestNumber = bestDiff !== null
   const bestNumberColor = hasBestNumber ? bestDiffToColor(bestDiff as number) : "#16a34a"
 
@@ -1076,18 +1132,20 @@ const revealStyle = gameFinished
         position:"relative",
         zIndex:0,
         width:"100%",
-        padding:isCompact ? "6px 8px 10px" : "0"
+        padding:isCompact ? "4px 6px 6px" : "0",
+        touchAction: isCompact ? "manipulation" : undefined,
+        overflow: isCompact ? "hidden" : undefined
       }}
     >
 
      <div
   style={{
     textAlign:"center",
-    marginBottom:isCompact ? "4px" : "8px"
+    marginBottom:isCompact ? "2px" : "8px"
   }}
 >
 
-<div style={{textAlign:"center", marginBottom:isCompact ? "4px" : "8px"}}>
+<div style={{textAlign:"center", marginBottom:isCompact ? "2px" : "8px"}}>
 
   {/* Orbidrop + Streak + Info/Stats */}
 
@@ -1096,12 +1154,13 @@ const revealStyle = gameFinished
       display:"flex",
       alignItems:"center",
       justifyContent:"space-between",
-      gap:isCompact ? "10px" : "16px",
-      fontSize:isCompact ? "15px" : "16px",
+      gap:isCompact ? "8px" : "16px",
+      fontSize:isCompact ? "14px" : "16px",
       fontWeight:"600",
       width:"100%",
       maxWidth:`${playfieldWidth}px`,
-      margin:"0 auto"
+      margin:"0 auto",
+      color: theme.text
     }}
   >
     <div style={{display:"flex", alignItems:"center", gap:"8px"}}>
@@ -1121,10 +1180,10 @@ const revealStyle = gameFinished
           }}
         />
       )}
-      <span>Orbidrop #{dayNumber}</span>
+      <span style={{ color: theme.text }}>Orbidrop #{dayNumber}</span>
     </div>
       <div style={{display:"flex", alignItems:"center", gap:"8px"}}>
-      <div style={{fontSize:"14px", color:"#666"}}>
+      <div style={{fontSize:"14px", color: theme.muted}}>
         🔥 {stats.streak}
       </div>
       {gameOver && (
@@ -1137,19 +1196,44 @@ const revealStyle = gameFinished
             height:isCompact ? "32px" : "24px",
             borderRadius:"999px",
             border:"none",
-            background:"#f1f3f5",
+            background: theme.cardLight,
             display:"flex",
             alignItems:"center",
             justifyContent:"center",
             fontSize:isCompact ? "16px" : "13px",
             cursor:"pointer",
-            color:"#495057",
-            boxShadow:"0 1px 2px rgba(0,0,0,0.12)"
+            color: theme.muted,
+            boxShadow: darkMode ? "0 1px 2px rgba(0,0,0,0.3)" : "0 1px 2px rgba(0,0,0,0.12)"
           }}
         >
           📊
         </button>
       )}
+      <button
+        type="button"
+        onClick={() => setDarkMode(prev => !prev)}
+        aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+        style={{
+          position:"fixed",
+          right: isCompact ? "66px" : "64px",
+          bottom:isCompact ? "14px" : "18px",
+          width:isCompact ? "46px" : "42px",
+          height:isCompact ? "46px" : "42px",
+          borderRadius:"999px",
+          border:"none",
+          background: darkMode ? "#374151" : theme.buttonMuted,
+          display:"flex",
+          alignItems:"center",
+          justifyContent:"center",
+          fontSize:"16px",
+          cursor:"pointer",
+          color: darkMode ? "#e5e5e5" : theme.muted,
+          boxShadow:"0 6px 16px rgba(0,0,0,0.18)",
+          zIndex:2500
+        }}
+      >
+        {darkMode ? "☀️" : "🌙"}
+      </button>
       <button
         type="button"
         onClick={() => setSoundEnabled(prev => !prev)}
@@ -1162,13 +1246,13 @@ const revealStyle = gameFinished
           height:isCompact ? "46px" : "42px",
           borderRadius:"999px",
           border:"none",
-          background: soundEnabled ? "#2a9d8f" : "#e9ecef",
+          background: soundEnabled ? "#2a9d8f" : theme.buttonMuted,
           display:"flex",
           alignItems:"center",
           justifyContent:"center",
           fontSize:"16px",
           cursor:"pointer",
-          color: soundEnabled ? "white" : "#495057",
+          color: soundEnabled ? "white" : theme.muted,
           boxShadow:"0 6px 16px rgba(0,0,0,0.18)",
           zIndex:2500
         }}
@@ -1184,14 +1268,14 @@ const revealStyle = gameFinished
           height:isCompact ? "32px" : "24px",
           borderRadius:"999px",
           border:"none",
-          background:"#e9ecef",
+          background: theme.cardLighter,
           display:"flex",
           alignItems:"center",
           justifyContent:"center",
           fontSize:isCompact ? "16px" : "13px",
           cursor:"pointer",
-          color:"#495057",
-          boxShadow:"0 1px 2px rgba(0,0,0,0.12)"
+          color: theme.muted,
+          boxShadow: darkMode ? "0 1px 2px rgba(0,0,0,0.3)" : "0 1px 2px rgba(0,0,0,0.12)"
         }}
       >
         i
@@ -1203,14 +1287,15 @@ const revealStyle = gameFinished
 
   <div
     style={{
-      marginTop:isCompact ? "4px" : "6px",
+      marginTop:isCompact ? "2px" : "6px",
       display:"inline-block",
-      padding:"6px 14px",
+      padding:isCompact ? "4px 10px" : "6px 14px",
       borderRadius:"10px",
-      background:"#f1f3f5",
-      boxShadow:"0 2px 6px rgba(0,0,0,0.1)",
+      background: theme.cardLight,
+      boxShadow: darkMode ? "0 2px 6px rgba(0,0,0,0.3)" : "0 2px 6px rgba(0,0,0,0.1)",
       fontWeight:"600",
-      fontSize:"16px"
+      fontSize:"16px",
+      color: theme.text
     }}
   >
     🎯 Target {target}
@@ -1218,9 +1303,9 @@ const revealStyle = gameFinished
 
   {/* Attempts */}
 
-  <div style={{marginTop:isCompact ? "6px" : "8px"}}>
+  <div style={{marginTop:isCompact ? "2px" : "8px"}}>
 
-    <div style={{fontSize:"12px", color:"#666", marginBottom:"4px"}}>
+    <div style={{fontSize:isCompact ? "11px" : "12px", color: theme.muted, marginBottom:isCompact ? "2px" : "4px"}}>
       Attempts
     </div>
 
@@ -1247,11 +1332,11 @@ const revealStyle = gameFinished
             background:
               attempt > i
                 ? "#2a9d8f"
-                : "#e9ecef",
+                : theme.cardLighter,
             color:
               attempt > i
                 ? "white"
-                : "#555"
+                : theme.muted2
           }}
         >
           {i}
@@ -1282,8 +1367,8 @@ const revealStyle = gameFinished
   style={{
     display:"flex",
     justifyContent:"center",
-    gap:"8px",
-    marginTop:"8px"
+    gap: isCompact ? "6px" : "8px",
+    marginTop: isCompact ? "4px" : "8px"
   }}
 >
 
@@ -1291,14 +1376,14 @@ const revealStyle = gameFinished
 
   <div
     style={{
-      background:"#f7f8fa",
-      padding:"6px 12px",
+      background: theme.card,
+      padding: isCompact ? "4px 8px" : "6px 12px",
       borderRadius:"10px",
-      fontSize:"14px",
-      minWidth:"70px",
+      fontSize: isCompact ? "12px" : "14px",
+      minWidth: isCompact ? "56px" : "70px",
       textAlign:"center",
-      border:"1px solid rgba(0,0,0,0.06)",
-      boxShadow:"0 1px 3px rgba(0,0,0,0.06)",
+      border:`1px solid ${theme.border}`,
+      boxShadow: darkMode ? "0 1px 3px rgba(0,0,0,0.3)" : "0 1px 3px rgba(0,0,0,0.06)",
       transform: isCounting
         ? "translateY(-2px) scale(1.12)"
         : scoreReveal
@@ -1308,7 +1393,7 @@ const revealStyle = gameFinished
         "transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
     }}
   >
-    <div style={{fontSize:"11px", color:"#777"}}>
+    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2}}>
       Result
     </div>
     <div
@@ -1331,14 +1416,14 @@ const revealStyle = gameFinished
 
   <div
     style={{
-      background:"#f7f8fa",
-      padding:"6px 12px",
+      background: theme.card,
+      padding: isCompact ? "4px 8px" : "6px 12px",
       borderRadius:"10px",
-      fontSize:"14px",
-      minWidth:"70px",
+      fontSize: isCompact ? "12px" : "14px",
+      minWidth: isCompact ? "56px" : "70px",
       textAlign:"center",
-      border:"1px solid rgba(0,0,0,0.06)",
-      boxShadow:"0 1px 3px rgba(0,0,0,0.06)",
+      border:`1px solid ${theme.border}`,
+      boxShadow: darkMode ? "0 1px 3px rgba(0,0,0,0.3)" : "0 1px 3px rgba(0,0,0,0.06)",
       transform: isCounting
         ? "translateY(-2px) scale(1.12)"
         : scoreReveal
@@ -1348,7 +1433,7 @@ const revealStyle = gameFinished
         "transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
     }}
   >
-    <div style={{fontSize:"11px", color:"#777"}}>
+    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2}}>
       Diff
     </div>
     <div
@@ -1371,19 +1456,19 @@ const revealStyle = gameFinished
 
   <div
     style={{
-      background:"#f7f8fa",
-      padding:"6px 12px",
+      background: theme.card,
+      padding: isCompact ? "4px 8px" : "6px 12px",
       borderRadius:"10px",
-      fontSize:"14px",
-      minWidth:"70px",
+      fontSize: isCompact ? "12px" : "14px",
+      minWidth: isCompact ? "56px" : "70px",
       textAlign:"center",
-      border:"1px solid rgba(0,0,0,0.06)",
-      boxShadow:"0 1px 3px rgba(0,0,0,0.06)",
+      border:`1px solid ${theme.border}`,
+      boxShadow: darkMode ? "0 1px 3px rgba(0,0,0,0.3)" : "0 1px 3px rgba(0,0,0,0.06)",
       transition:
         "background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease"
     }}
   >
-    <div style={{fontSize:"11px", color:"#777"}}>
+    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2}}>
       Best
     </div>
     <div
@@ -1404,10 +1489,12 @@ const revealStyle = gameFinished
         <hr
           style={{
             width:`${playfieldWidth}px`,
-            margin:isCompact ? "4px 0" : "6px 0",
+            margin:isCompact ? "2px 0" : "6px 0",
             border:"none",
             height:"1px",
-            background:"linear-gradient(to right, rgba(0,0,0,0), rgba(0,0,0,0.06), rgba(0,0,0,0))"
+            background: darkMode
+              ? "linear-gradient(to right, rgba(255,255,255,0), rgba(255,255,255,0.06), rgba(255,255,255,0))"
+              : "linear-gradient(to right, rgba(0,0,0,0), rgba(0,0,0,0.06), rgba(0,0,0,0))"
           }}
         />
 
@@ -1418,13 +1505,14 @@ const revealStyle = gameFinished
         style={{
           width: `${playfieldWidth}px`,
           height: `${playfieldHeight}px`,
-          marginTop: isCompact ? "4px" : "6px",
+          marginTop: isCompact ? "2px" : "6px",
           borderRadius: "0 0 16px 16px",
-          background: "linear-gradient(to bottom,#ffffff 0%, #f7f8fb 55%, #f1f3f5 100%)",
+          background: theme.glass,
           overflow: "hidden",
           position: "relative",
-          boxShadow:
-            "inset 4px 0 0 rgba(110,110,110,0.44), inset -4px 0 0 rgba(110,110,110,0.44), inset 0 -1px 0 rgba(70,70,70,0.28), inset 0 -10px 14px rgba(0,0,0,0.05), inset 0 -26px 26px rgba(0,0,0,0.07), inset 0 0 0 1px rgba(0,0,0,0.035), 0 8px 20px rgba(0,0,0,0.055)",
+          boxShadow: darkMode
+            ? "inset 2px 0 0 rgba(255,255,255,0.06), inset -2px 0 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.2), inset 0 -10px 14px rgba(0,0,0,0.15), 0 8px 20px rgba(0,0,0,0.25)"
+            : "inset 4px 0 0 rgba(110,110,110,0.44), inset -4px 0 0 rgba(110,110,110,0.44), inset 0 -1px 0 rgba(70,70,70,0.28), inset 0 -10px 14px rgba(0,0,0,0.05), inset 0 -26px 26px rgba(0,0,0,0.07), inset 0 0 0 1px rgba(0,0,0,0.035), 0 8px 20px rgba(0,0,0,0.055)",
           transform:
             stopImpact || dropImpact
               ? "translateY(-1px) scale(1.02)"
@@ -1441,7 +1529,7 @@ const revealStyle = gameFinished
             style={{
               position: "absolute",
               inset: 0,
-              background: "rgba(255,255,255,0.06)",
+              background: theme.glassHighlight,
               pointerEvents: "none",
               zIndex: 1,
               opacity: 1,
@@ -1458,10 +1546,10 @@ const revealStyle = gameFinished
             transform: "translate(-50%, -50%)",
             fontSize: "16px",
             fontWeight: 850,
-            color: "#000",
+            color: theme.feedbackText,
             letterSpacing: "-0.01em",
             lineHeight: 1.05,
-            textShadow: "0 1px 8px rgba(0,0,0,0.06)",
+            textShadow: darkMode ? "0 1px 8px rgba(0,0,0,0.4)" : "0 1px 8px rgba(0,0,0,0.06)",
             zIndex: 2,
             opacity: showFeedback ? 1 : 0,
             transition: showFeedback
@@ -1482,7 +1570,7 @@ const revealStyle = gameFinished
             })`,
             fontSize: isCompact ? "118px" : "138px",
             fontWeight: "750",
-            color: "#000",
+            color: theme.feedbackText,
             opacity:
               stopImpact || dropImpact
                 ? 0.1
@@ -1566,6 +1654,10 @@ const revealStyle = gameFinished
         }}
         onPointerDown={() => {
           if (isCounting) return
+          // Haptic at touch start maximizes mobile support (user-gesture context)
+          if (gameOver) triggerHaptic("press")
+          else if (running) triggerHaptic("stop")
+          else triggerHaptic("press")
           triggerActionButtonFeedback()
         }}
         onPointerUp={() => {}}
@@ -1578,8 +1670,8 @@ const revealStyle = gameFinished
         }}
         disabled={isCounting}
         style={{
-          marginTop:isCompact ? "8px" : "10px",
-          padding:isCompact ? "14px 34px" : "14px 40px",
+          marginTop:isCompact ? "4px" : "10px",
+          padding:isCompact ? "12px 28px" : "14px 40px",
           fontSize:"20px",
           border:"none",
           borderRadius:"10px",
@@ -1614,32 +1706,32 @@ const revealStyle = gameFinished
         {gameOver ? "STATS" : running ? "STOP" : "DROP"}
       </button>
 
-      {gameOver && showStats && (
-
+      {gameOver && showStats && typeof document !== "undefined" && createPortal(
         <div
           style={{
             position:"fixed",
-            top:0,
-            left:0,
-            width:"100%",
-            height:"100%",
-            background:"rgba(0,0,0,0.55)",
+            inset:0,
+            width:"100vw",
+            height:"100dvh",
+            minHeight:"100vh",
+            background: theme.overlay,
             display:"flex",
             alignItems:"flex-start",
             justifyContent:"center",
             paddingTop:"22vh",
-            zIndex:1000
+            zIndex:10000
           }}
         >
 
           <div
             style={{
-              background:"white",
+              background: theme.modal,
+              color: theme.modalText,
               padding:"26px 26px 24px",
               borderRadius:"16px",
               textAlign:"center",
               width:"340px",
-              boxShadow:"0 15px 50px rgba(0,0,0,0.35)",
+              boxShadow: darkMode ? "0 15px 50px rgba(0,0,0,0.6)" : "0 15px 50px rgba(0,0,0,0.35)",
               position:"relative",
               opacity: statsPopUpReady ? 1 : 0,
               transform: statsPopUpReady ? "translateY(0px)" : "translateY(10px)",
@@ -1659,18 +1751,19 @@ const revealStyle = gameFinished
                 background:"transparent",
                 cursor:"pointer",
                 fontSize:"18px",
-                lineHeight:1
+                lineHeight:1,
+                color: theme.modalText
               }}
             >
               ×
             </button>
 
-            <h2 style={{marginTop:"4px"}}>🎉 Game finished!</h2>
-             <p style={{marginTop:"10px"}}>
+            <h2 style={{marginTop:"4px", color: theme.modalText}}>🎉 Game finished!</h2>
+             <p style={{marginTop:"10px", color: theme.modalText}}>
               ⭐Best diff: <b>{bestDiff}</b>
             </p>
             {percentile && (
-              <p>
+              <p style={{ color: theme.modalText }}>
                 🌍You beat <b>{percentile}%</b> of players today
               </p>
             )}
@@ -1678,8 +1771,9 @@ const revealStyle = gameFinished
              <h3
   style={{
     marginTop:"20px",
-    borderBottom:"2px solid #ddd",
-    paddingBottom:"6px"
+    borderBottom: `2px solid ${theme.border}`,
+    paddingBottom:"6px",
+    color: theme.modalText
   }}
 >
   Your all-time stats
@@ -1696,12 +1790,12 @@ const revealStyle = gameFinished
   }}
 >
 
-  <div>
+  <div style={{ color: theme.modalText }}>
     <strong>🎮 Played</strong>
     <div>{stats.played}</div>
   </div>
 
-  <div>
+  <div style={{ color: theme.modalText }}>
     <strong>🏆 Best</strong>
     <div>{stats.best ?? "-"}</div>
   </div>
@@ -1723,19 +1817,19 @@ const revealStyle = gameFinished
     </div>
   </div>
 
-  <div>
+  <div style={{ color: theme.modalText }}>
     <strong>🔥 Streak</strong>
     <div>{stats.streak}</div>
   </div>
 
-  <div>
+  <div style={{ color: theme.modalText }}>
     <strong>🌍 Global Orbs</strong>
     <div>{stats.earthCollected}</div>
   </div>
 
   <div>
     <strong>🌍 Global today</strong>
-    <div style={{color: earthCollectedToday ? "#2a9d8f" : isEarthDropPlayerToday ? "#e9c46a" : "#666"}}>
+    <div style={{color: earthCollectedToday ? "#2a9d8f" : isEarthDropPlayerToday ? "#e9c46a" : theme.modalMuted}}>
       {earthCollectedToday
         ? "Collected (you)"
         : isEarthDropPlayerToday
@@ -1747,7 +1841,8 @@ const revealStyle = gameFinished
   <div
   style={{
     gridColumn:"1 / span 2",
-    textAlign:"center"
+    textAlign:"center",
+    color: theme.modalText
   }}
 >
   <strong>⭐ Max streak</strong>
@@ -1774,37 +1869,41 @@ const revealStyle = gameFinished
               Share result
             </button>
 
-            <p style={{marginTop:"16px",fontSize:"14px",color:"#666",fontWeight:"bold"}}>
+            <p style={{marginTop:"16px",fontSize:"14px",color: theme.modalMuted,fontWeight:"bold"}}>
              Next Orbidrop in {timeLeft}
             </p>
 
           </div>
 
-        </div>
-
+        </div>,
+        document.body
       )}
 
-      {showEarthWin && (
+      {showEarthWin && typeof document !== "undefined" && createPortal(
         <div
           style={{
             position:"fixed",
             inset:0,
-            background:"rgba(0,0,0,0.55)",
+            width:"100vw",
+            height:"100dvh",
+            minHeight:"100vh",
+            background: theme.overlay,
             display:"flex",
             alignItems:"center",
             justifyContent:"center",
-            zIndex:1500,
+            zIndex:10000,
             padding:"16px"
           }}
         >
           <div
             style={{
-              background:"white",
+              background: theme.modal,
+              color: theme.modalText,
               padding:"22px 22px 18px",
               borderRadius:"16px",
               textAlign:"center",
               width:"340px",
-              boxShadow:"0 15px 50px rgba(0,0,0,0.35)",
+              boxShadow: darkMode ? "0 15px 50px rgba(0,0,0,0.6)" : "0 15px 50px rgba(0,0,0,0.35)",
               position:"relative"
             }}
           >
@@ -1820,15 +1919,16 @@ const revealStyle = gameFinished
                 background:"transparent",
                 cursor:"pointer",
                 fontSize:"18px",
-                lineHeight:1
+                lineHeight:1,
+                color: theme.modalText
               }}
             >
               ×
             </button>
 
             <div style={{fontSize:"34px", marginTop:"2px"}}>🌍</div>
-            <h3 style={{margin:"8px 0 6px"}}>Lucky drop!</h3>
-            <p style={{margin:"0 0 12px", color:"#333"}}>
+            <h3 style={{margin:"8px 0 6px", color: theme.modalText}}>Lucky drop!</h3>
+            <p style={{margin:"0 0 12px", color: theme.modalMuted}}>
               You collected today&apos;s <b>Global Orb</b>!
             </p>
 
@@ -1850,39 +1950,46 @@ const revealStyle = gameFinished
               Share Global Orb win
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {showRules && (
-
+      {showRules && typeof document !== "undefined" && createPortal(
         <div
           style={{
             position:"fixed",
             inset:0,
-            background:"rgba(0,0,0,0.65)",
+            width:"100vw",
+            height:"100dvh",
+            minHeight:"100vh",
+            background: theme.overlay,
             display:"flex",
             alignItems:"center",
             justifyContent:"center",
-            zIndex:2000,
+            zIndex:10000,
             padding:"16px"
           }}
         >
 
           <div
             style={{
-              background:"white",
+              background: theme.modal,
+              color: theme.modalText,
               padding:"24px 22px 20px",
               borderRadius:"18px",
               textAlign:"left",
               maxWidth:"360px",
               width:"100%",
-              boxShadow:"0 18px 55px rgba(0,0,0,0.45)",
+              boxShadow: darkMode ? "0 18px 55px rgba(0,0,0,0.6)" : "0 18px 55px rgba(0,0,0,0.45)",
               fontSize:"14px",
-              lineHeight:1.5
+              lineHeight:1.5,
+              opacity: rulesPopUpReady ? 1 : 0,
+              transform: rulesPopUpReady ? "translateY(0px)" : "translateY(10px)",
+              transition:"opacity 650ms ease, transform 650ms ease"
             }}
           >
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <h2 style={{margin:0,fontSize:"18px"}}>How Orbidrop works</h2>
+              <h2 style={{margin:0,fontSize:"18px", color: theme.modalText}}>How Orbidrop works</h2>
               <button
                 onClick={() => {
                   localStorage.setItem("orbifallRulesSeen","true")
@@ -1894,14 +2001,15 @@ const revealStyle = gameFinished
                   background:"transparent",
                   cursor:"pointer",
                   fontSize:"18px",
-                  lineHeight:1
+                  lineHeight:1,
+                  color: theme.modalText
                 }}
               >
                 ×
               </button>
             </div>
 
-            <div style={{marginTop:"14px",display:"grid",gap:"10px"}}>
+            <div style={{marginTop:"14px",display:"grid",gap:"10px", color: theme.modalText}}>
               <div>
                 <div style={{fontWeight:700}}>🎯 Goal</div>
                 <div>Hit the Target number as closely as possible.</div>
@@ -1958,8 +2066,8 @@ const revealStyle = gameFinished
 
           </div>
 
-        </div>
-
+        </div>,
+        document.body
       )}
 
     </div>

@@ -1,33 +1,28 @@
 import GameCanvas from "./components/GameCanvas"
+import ScaleToFit from "./components/ScaleToFit"
 
 export default function Home() {
   return (
-    <main
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        marginTop: "40px",
-        gap: "5px"
-      }}
-    >
-      
-      <p>Stop the drop at the perfect count.</p>
+    <main className="orbifall-main">
+      <ScaleToFit>
+        <div className="orbifall-game-wrap">
+          <GameCanvas />
+        </div>
 
-      <GameCanvas />
-
-      <footer
-        style={{
-          marginTop: "40px",
-          padding: "20px",
-          fontSize: "12px",
-          textAlign: "center",
-          opacity: 0.6
-        }}
-      >
-        <a href="/links">Links</a> · <a href="/imprint">Imprint</a> ·{" "}
-        <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a>
-      </footer>
+        <footer
+          className="orbifall-footer"
+          style={{
+            marginTop: "20px",
+            padding: "16px",
+            fontSize: "12px",
+            textAlign: "center",
+            opacity: 0.6
+          }}
+        >
+          <a href="/links">Links</a> · <a href="/imprint">Imprint</a> ·{" "}
+          <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a>
+        </footer>
+      </ScaleToFit>
     </main>
   )
 }
