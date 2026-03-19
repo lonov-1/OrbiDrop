@@ -193,6 +193,7 @@ export default function GameCanvas() {
   const [showFeedback, setShowFeedback] = useState(false)
   const [statsPopUpReady, setStatsPopUpReady] = useState(false)
   const [rulesPopUpReady, setRulesPopUpReady] = useState(false)
+  const [isSmallScreen, setIsSmallScreen] = useState(false)
   const isCompact = false
 
   const [soundEnabled, setSoundEnabled] = useState(() => {
@@ -496,6 +497,28 @@ export default function GameCanvas() {
     })
     return () => cancelAnimationFrame(raf)
   }, [showRules])
+
+  useEffect(() => {
+    const check = () => {
+      const w = typeof window !== "undefined" ? window.innerWidth : 400
+      const h =
+        typeof window !== "undefined"
+          ? (window.visualViewport?.height ?? window.innerHeight)
+          : 700
+      setIsSmallScreen(w < 400 || h < 600)
+    }
+    check()
+    window.addEventListener("resize", check)
+    if (typeof window !== "undefined" && window.visualViewport) {
+      window.visualViewport.addEventListener("resize", check)
+    }
+    return () => {
+      window.removeEventListener("resize", check)
+      if (typeof window !== "undefined" && window.visualViewport) {
+        window.visualViewport.removeEventListener("resize", check)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -1132,7 +1155,7 @@ const revealStyle = gameFinished
         position:"relative",
         zIndex:0,
         width:"100%",
-        padding:isCompact ? "4px 6px 6px" : "0",
+        padding: isCompact ? "4px 6px 6px" : "0 0 16px 0",
         touchAction: isCompact ? "manipulation" : undefined,
         overflow: isCompact ? "hidden" : undefined
       }}
@@ -1211,56 +1234,6 @@ const revealStyle = gameFinished
       )}
       <button
         type="button"
-        onClick={() => setDarkMode(prev => !prev)}
-        aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-        style={{
-          position:"fixed",
-          right: isCompact ? "66px" : "64px",
-          bottom:isCompact ? "14px" : "18px",
-          width:isCompact ? "46px" : "42px",
-          height:isCompact ? "46px" : "42px",
-          borderRadius:"999px",
-          border:"none",
-          background: darkMode ? "#374151" : theme.buttonMuted,
-          display:"flex",
-          alignItems:"center",
-          justifyContent:"center",
-          fontSize:"16px",
-          cursor:"pointer",
-          color: darkMode ? "#e5e5e5" : theme.muted,
-          boxShadow:"0 6px 16px rgba(0,0,0,0.18)",
-          zIndex:2500
-        }}
-      >
-        {darkMode ? "☀️" : "🌙"}
-      </button>
-      <button
-        type="button"
-        onClick={() => setSoundEnabled(prev => !prev)}
-        aria-label={soundEnabled ? "Turn sound effects off" : "Turn sound effects on"}
-        style={{
-          position:"fixed",
-          right:"14px",
-          bottom:isCompact ? "14px" : "18px",
-          width:isCompact ? "46px" : "42px",
-          height:isCompact ? "46px" : "42px",
-          borderRadius:"999px",
-          border:"none",
-          background: soundEnabled ? "#2a9d8f" : theme.buttonMuted,
-          display:"flex",
-          alignItems:"center",
-          justifyContent:"center",
-          fontSize:"16px",
-          cursor:"pointer",
-          color: soundEnabled ? "white" : theme.muted,
-          boxShadow:"0 6px 16px rgba(0,0,0,0.18)",
-          zIndex:2500
-        }}
-      >
-        {soundEnabled ? "🔊" : "🔇"}
-      </button>
-      <button
-        type="button"
         onClick={() => setShowRules(true)}
         aria-label="Show how to play"
         style={{
@@ -1287,15 +1260,16 @@ const revealStyle = gameFinished
 
   <div
     style={{
-      marginTop:isCompact ? "2px" : "6px",
-      display:"inline-block",
-      padding:isCompact ? "4px 10px" : "6px 14px",
-      borderRadius:"10px",
+      marginTop: isCompact ? "2px" : "4px",
+      display: "inline-block",
+      padding: isCompact ? "3px 8px" : "4px 10px",
+      borderRadius: "8px",
       background: theme.cardLight,
-      boxShadow: darkMode ? "0 2px 6px rgba(0,0,0,0.3)" : "0 2px 6px rgba(0,0,0,0.1)",
-      fontWeight:"600",
-      fontSize:"16px",
-      color: theme.text
+      boxShadow: darkMode ? "0 1px 3px rgba(0,0,0,0.2)" : "0 1px 3px rgba(0,0,0,0.06)",
+      fontWeight: "500",
+      fontSize: "13px",
+      color: theme.muted,
+      opacity: 0.9
     }}
   >
     🎯 Target {target}
@@ -1566,20 +1540,21 @@ const revealStyle = gameFinished
             top: "28%",
             left: "50%",
             transform: `translate(-50%, -50%) scale(${
-              running && !isCounting ? 1.03 : 1
+              running && !isCounting ? 1.05 : 1
             })`,
             fontSize: isCompact ? "118px" : "138px",
-            fontWeight: "750",
+            fontWeight: "800",
             color: theme.feedbackText,
             opacity:
               stopImpact || dropImpact
-                ? 0.1
+                ? 0.2
                 : running && !isCounting
-                ? 0.082
-                : 0.062,
-            textShadow:
-              "0 0 16px rgba(255,255,255,0.12), 0 2px 10px rgba(0,0,0,0.08)",
-            letterSpacing: "-0.015em",
+                ? 0.28
+                : 0.22,
+            textShadow: darkMode
+              ? "0 0 24px rgba(255,255,255,0.15), 0 0 12px rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.5)"
+              : "0 0 24px rgba(255,255,255,0.25), 0 0 12px rgba(255,255,255,0.12), 0 2px 12px rgba(0,0,0,0.08)",
+            letterSpacing: "-0.02em",
             pointerEvents: "none",
             transition: "transform 200ms ease, opacity 200ms ease"
           }}
@@ -2069,6 +2044,70 @@ const revealStyle = gameFinished
         </div>,
         document.body
       )}
+
+      {typeof document !== "undefined" &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              right: isSmallScreen ? "10px" : "14px",
+              bottom: isSmallScreen ? "10px" : "18px",
+              display: "flex",
+              gap: "8px",
+              alignItems: "center",
+              zIndex: 2500,
+              padding: "0 env(safe-area-inset-right) env(safe-area-inset-bottom) 0"
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setDarkMode(prev => !prev)}
+              aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+              style={{
+                width: isSmallScreen ? "34px" : "42px",
+                height: isSmallScreen ? "34px" : "42px",
+                borderRadius: "999px",
+                border: "none",
+                background: darkMode ? "#374151" : theme.buttonMuted,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: isSmallScreen ? "14px" : "16px",
+                cursor: "pointer",
+                color: darkMode ? "#e5e5e5" : theme.muted,
+                boxShadow: "0 6px 16px rgba(0,0,0,0.18)"
+              }}
+            >
+              {darkMode ? "☀️" : "🌙"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSoundEnabled(prev => !prev)}
+              aria-label={
+                soundEnabled
+                  ? "Turn sound effects off"
+                  : "Turn sound effects on"
+              }
+              style={{
+                width: isSmallScreen ? "34px" : "42px",
+                height: isSmallScreen ? "34px" : "42px",
+                borderRadius: "999px",
+                border: "none",
+                background: soundEnabled ? "#2a9d8f" : theme.buttonMuted,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: isSmallScreen ? "14px" : "16px",
+                cursor: "pointer",
+                color: soundEnabled ? "white" : theme.muted,
+                boxShadow: "0 6px 16px rgba(0,0,0,0.18)"
+              }}
+            >
+              {soundEnabled ? "🔊" : "🔇"}
+            </button>
+          </div>,
+          document.body
+        )}
 
     </div>
 
