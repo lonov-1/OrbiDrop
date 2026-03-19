@@ -13,11 +13,11 @@ export default function Imprint() {
       <p>Information according to § 5 ECG</p>
 
       <p>
-        Name: Your Name
+        Name: Leon Ring
         <br />
-        Address: Your Address
+        Address: Thunrgasse 19, 1090 Vienna, Austria
         <br />
-        Email: your@email.com
+        Email: leon.ring@yahoo.com
       </p>
 
       <h2>Disclaimer</h2>
