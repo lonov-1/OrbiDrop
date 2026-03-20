@@ -469,10 +469,17 @@ export default function GameCanvas() {
   }, [gameOver, bestDiff])
 
   useEffect(() => {
-    if (gameOver) {
+    if (!gameOver || bestDiff === null || showStats) return
+
+    // Give the final result/diff/reveal a moment to finish
+    // before mounting the full Statistics modal.
+    const delayMs = isSmallScreen ? 850 : 750
+    const t = window.setTimeout(() => {
       setShowStats(true)
-    }
-  }, [gameOver])
+    }, delayMs)
+
+    return () => window.clearTimeout(t)
+  }, [gameOver, bestDiff, showStats, isSmallScreen])
 
   useEffect(() => {
     if (!showStats) {
