@@ -1574,7 +1574,10 @@ const revealStyle = gameFinished
           height: `${playfieldHeight}px`,
           marginTop: isCompact ? "2px" : "6px",
           position: "relative",
-          borderRadius: "0 0 16px 16px"
+          borderRadius: "0 0 16px 16px",
+          boxShadow: darkMode
+            ? "0 18px 55px rgba(0,0,0,0.35)"
+            : "0 18px 55px rgba(0,0,0,0.08)"
         }}
       >
         {/* Slightly darker area behind the glass (background separation). */}
