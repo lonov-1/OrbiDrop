@@ -1751,6 +1751,11 @@ const revealStyle = gameFinished
             paddingTop: isSmallScreen ? "16vh" : "18vh",
             zIndex:10000
           }}
+          onMouseDown={(e) => {
+            if (e.target !== e.currentTarget) return
+            setShowStats(false)
+            setStatsDismissed(true)
+          }}
         >
 
           <div
@@ -1778,8 +1783,13 @@ const revealStyle = gameFinished
               aria-label="Close stats"
               style={{
                 position:"absolute",
-                top:"10px",
-                right:"10px",
+                top:"8px",
+                right:"8px",
+                width:"34px",
+                height:"34px",
+                display:"flex",
+                alignItems:"center",
+                justifyContent:"center",
                 border:"none",
                 background:"transparent",
                 cursor:"pointer",
@@ -2002,6 +2012,11 @@ const revealStyle = gameFinished
             zIndex:10000,
             padding:"16px"
           }}
+          onMouseDown={(e) => {
+            if (e.target !== e.currentTarget) return
+            localStorage.setItem("orbifallRulesSeen","true")
+            setShowRules(false)
+          }}
         >
 
           <div
@@ -2035,7 +2050,12 @@ const revealStyle = gameFinished
                   cursor:"pointer",
                   fontSize:"18px",
                   lineHeight:1,
-                  color: theme.modalText
+                  color: theme.modalText,
+                  width:"34px",
+                  height:"34px",
+                  display:"flex",
+                  alignItems:"center",
+                  justifyContent:"center"
                 }}
               >
                 ×
