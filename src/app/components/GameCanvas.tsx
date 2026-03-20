@@ -268,6 +268,8 @@ export default function GameCanvas() {
   // Compact sizing for phones (keeps the layout balanced without scrolling).
   const isCompact = isSmallScreen
 
+  const supabaseEnabled = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL)
+
   const [soundEnabled, setSoundEnabled] = useState(() => {
     return getStorageItem("orbidropSoundEnabled") !== "false"
   })
@@ -543,6 +545,41 @@ export default function GameCanvas() {
     earthCollected: 0
   })
 
+  // Sync daily attempts + all-time stats from Supabase (no login required).
+  useEffect(() => {
+    if (!supabaseEnabled) return
+
+    const run = async () => {
+      try {
+        const attemptsRes = await fetch(
+          `/api/daily-attempts?date=${encodeURIComponent(todayKey)}&playerId=${encodeURIComponent(playerId)}`
+        )
+        const attemptsData = await attemptsRes.json()
+
+        const attemptsUsed = Number(attemptsData?.attemptsUsed ?? 0)
+        const bestDiffForDay =
+          attemptsData?.bestDiff !== null && attemptsData?.bestDiff !== undefined
+            ? Number(attemptsData.bestDiff)
+            : null
+
+        setAttempt(Math.min(GAME.maxAttempts + 1, attemptsUsed + 1))
+        setBestDiff(bestDiffForDay)
+      } catch {
+        // If Supabase isn't reachable (dev), keep local defaults.
+      }
+
+      try {
+        const statsRes = await fetch(`/api/player-stats?playerId=${encodeURIComponent(playerId)}`)
+        const statsData = await statsRes.json()
+        if (statsData?.stats) setStats(statsData.stats as Stats)
+      } catch {
+        // ignore
+      }
+    }
+
+    run()
+  }, [todayKey, playerId])
+
   const gameOver = attempt > GAME.maxAttempts
 
   // When a new game finishes (gameOver flips from false -> true),
@@ -557,7 +594,7 @@ export default function GameCanvas() {
   }, [gameOver])
 
   useEffect(() => {
-
+    if (supabaseEnabled) return
     if (!gameOver || bestDiff === null) return
 
     const diff = bestDiff
@@ -761,17 +798,18 @@ export default function GameCanvas() {
   }, [playfieldWidth, playfieldHeight])
 
   useEffect(() => {
+  if (supabaseEnabled) return
 
- const savedStats = localStorage.getItem("orbifallStats")
+  const savedStats = localStorage.getItem("orbifallStats")
 
-if (savedStats !== null) {
-  const parsed = JSON.parse(savedStats) as Partial<Stats>
-  setStats(prev => ({
-    ...prev,
-    ...parsed,
-    earthCollected: parsed.earthCollected ?? prev.earthCollected
-  }))
-}
+  if (savedStats !== null) {
+    const parsed = JSON.parse(savedStats) as Partial<Stats>
+    setStats(prev => ({
+      ...prev,
+      ...parsed,
+      earthCollected: parsed.earthCollected ?? prev.earthCollected
+    }))
+  }
 
 }, [])
 
@@ -1022,6 +1060,21 @@ useEffect(() => {
     const isClose = diff > 0 && diff <= 3
     const isMedium = diff > 3 && diff <= 10
 
+    const submitAttemptPromise = supabaseEnabled
+      ? fetch("/api/daily-submit-attempt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date: todayKey,
+            playerId,
+            ballCount: finalCount,
+            target
+          })
+        })
+          .then(r => r.json())
+          .catch(() => null)
+      : Promise.resolve(null)
+
     setStopDiff(diff)
     setStopPulse(false)
 
@@ -1100,6 +1153,41 @@ useEffect(() => {
       setAttemptResults(prev => [...prev, diff])
       setBestDiff(prev => (prev === null ? diff : Math.min(prev, diff)))
       setAttempt(prev => prev + 1)
+
+      // Persist this attempt + enforce daily limit server-side.
+      submitAttemptPromise?.then((data: any) => {
+        if (!data) return
+        if (data?.ok) {
+          const serverAttemptsUsed = Number(data.attemptsUsed ?? 0)
+          setAttempt(Math.min(GAME.maxAttempts + 1, serverAttemptsUsed + 1))
+
+          if (typeof data.bestDiff === "number") {
+            setBestDiff(data.bestDiff)
+          }
+
+          if (data.isDayComplete) {
+            fetch(`/api/player-stats?playerId=${encodeURIComponent(playerId)}`)
+              .then(r => r.json())
+              .then(statsRes => {
+                if (statsRes?.stats) {
+                  setStats(prev => {
+                    const serverStats = statsRes.stats as Stats
+                    return {
+                      ...serverStats,
+                      earthCollected: Math.max(prev.earthCollected, serverStats.earthCollected ?? 0)
+                    }
+                  })
+                }
+              })
+              .catch(() => {})
+          }
+        } else if (typeof data.attemptsUsed === "number") {
+          // If the server rejects because the daily limit is reached,
+          // align UI to the server truth.
+          const serverAttemptsUsed = Number(data.attemptsUsed)
+          setAttempt(Math.min(GAME.maxAttempts + 1, serverAttemptsUsed + 1))
+        }
+      })
 
       if (isPerfect) setPerfectBurstId(prev => prev + 1)
       // Small “dopamine” burst for diff 1..5 (very light, not noisy).
