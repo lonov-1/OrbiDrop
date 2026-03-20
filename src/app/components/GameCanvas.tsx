@@ -1569,19 +1569,45 @@ const revealStyle = gameFinished
       </div>
 
       <div
-        ref={glassRef}
         style={{
           width: `${playfieldWidth}px`,
           height: `${playfieldHeight}px`,
           marginTop: isCompact ? "2px" : "6px",
-          borderRadius: "0 0 16px 16px",
-          background: theme.glass,
-            border: `1px solid ${theme.border}`,
-          overflow: "hidden",
           position: "relative",
+          borderRadius: "0 0 16px 16px"
+        }}
+      >
+        {/* Slightly darker area behind the glass (background separation). */}
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            inset: "-14px -14px -18px -14px",
+            borderRadius: "18px",
+            background: darkMode
+              ? "radial-gradient(circle at center, rgba(0,0,0,0) 52%, rgba(0,0,0,0.22) 100%)"
+              : "radial-gradient(circle at center, rgba(0,0,0,0) 52%, rgba(0,0,0,0.07) 100%)",
+            pointerEvents: "none",
+            zIndex: 0
+          }}
+        />
+
+        <div
+          ref={glassRef}
+          style={{
+            width: "100%",
+            height: "100%",
+            borderRadius: "0 0 16px 16px",
+            background: theme.glass,
+            border: `1px solid ${
+              darkMode ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)"
+            }`,
+            overflow: "hidden",
+            position: "relative",
+            zIndex: 1,
           boxShadow: darkMode
-            ? "inset 2px 0 0 rgba(255,255,255,0.06), inset -2px 0 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.2), inset 0 -10px 14px rgba(0,0,0,0.15), 0 10px 26px rgba(0,0,0,0.20)"
-            : "inset 4px 0 0 rgba(110,110,110,0.40), inset -4px 0 0 rgba(110,110,110,0.40), inset 0 -1px 0 rgba(70,70,70,0.26), inset 0 -10px 14px rgba(0,0,0,0.05), inset 0 -26px 26px rgba(0,0,0,0.06), inset 0 0 0 1px rgba(0,0,0,0.03), 0 10px 26px rgba(0,0,0,0.07)",
+            ? "inset 2px 0 0 rgba(255,255,255,0.06), inset -2px 0 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.2), inset 0 -10px 14px rgba(0,0,0,0.15), 0 12px 30px rgba(0,0,0,0.22)"
+            : "inset 4px 0 0 rgba(110,110,110,0.40), inset -4px 0 0 rgba(110,110,110,0.40), inset 0 -1px 0 rgba(70,70,70,0.26), inset 0 -10px 14px rgba(0,0,0,0.05), inset 0 -26px 26px rgba(0,0,0,0.06), inset 0 0 0 1px rgba(0,0,0,0.03), 0 12px 30px rgba(0,0,0,0.08)",
           transform:
             stopImpact || dropImpact
               ? "translateY(-1px) scale(1.02)"
@@ -1590,8 +1616,8 @@ const revealStyle = gameFinished
               : "scale(1)",
           transition:
             "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 220ms ease"
-        }}
-      >
+          }}
+        >
 
           {/* Very light top-edge highlight */}
           <div
@@ -1603,8 +1629,8 @@ const revealStyle = gameFinished
               top: 0,
               height: "18px",
               background: darkMode
-                ? "linear-gradient(to bottom, rgba(255,255,255,0.09), rgba(255,255,255,0.00))"
-                : "linear-gradient(to bottom, rgba(255,255,255,0.14), rgba(255,255,255,0.00))",
+                ? "linear-gradient(to bottom, rgba(255,255,255,0.11), rgba(255,255,255,0.00))"
+                : "linear-gradient(to bottom, rgba(255,255,255,0.18), rgba(255,255,255,0.00))",
               pointerEvents: "none",
               zIndex: 0
             }}
@@ -1638,8 +1664,8 @@ const revealStyle = gameFinished
               bottom: 0,
               width: "3px",
               background: darkMode
-                ? "linear-gradient(to bottom, rgba(255,255,255,0.10), rgba(255,255,255,0.00) 70%)"
-                : "linear-gradient(to bottom, rgba(255,255,255,0.25), rgba(255,255,255,0.00) 70%)",
+                ? "linear-gradient(to bottom, rgba(255,255,255,0.12), rgba(255,255,255,0.00) 70%)"
+                : "linear-gradient(to bottom, rgba(255,255,255,0.30), rgba(255,255,255,0.00) 70%)",
               pointerEvents: "none",
               zIndex: 0
             }}
@@ -1653,8 +1679,8 @@ const revealStyle = gameFinished
               bottom: 0,
               width: "3px",
               background: darkMode
-                ? "linear-gradient(to bottom, rgba(255,255,255,0.10), rgba(255,255,255,0.00) 70%)"
-                : "linear-gradient(to bottom, rgba(255,255,255,0.25), rgba(255,255,255,0.00) 70%)",
+                ? "linear-gradient(to bottom, rgba(255,255,255,0.12), rgba(255,255,255,0.00) 70%)"
+                : "linear-gradient(to bottom, rgba(255,255,255,0.30), rgba(255,255,255,255,0.00) 70%)",
               pointerEvents: "none",
               zIndex: 0
             }}
@@ -1790,6 +1816,7 @@ const revealStyle = gameFinished
           }}
         />
 
+        </div>
       </div>
 
       <button
