@@ -16,7 +16,7 @@ type Stats = {
 
 const GAME = {
   width: 380,
-  height: 570,
+  height: 520,
   startDate: "2024-01-01",
   minTarget: 80,
   targetRange: 80,
@@ -66,13 +66,15 @@ const BALL_TEXTURE_SIZE = 100
 
 function makeBallTextureUri(baseColor: string, brightnessDelta: number) {
   // Bucket brightness a bit to keep caching effective.
-  const bucket = Math.max(-20, Math.min(20, Math.round(brightnessDelta / 5) * 5))
+  const bucket = Math.max(-24, Math.min(24, Math.round(brightnessDelta / 3) * 3))
 
   // Create a subtle "3D" look: radial gradient + soft highlight.
-  const top = varyHexBrightness(baseColor, 22 + bucket)
-  const mid = varyHexBrightness(baseColor, 6 + Math.round(bucket / 2))
-  const bottom = varyHexBrightness(baseColor, -12 + bucket)
-  const stroke = varyHexBrightness(baseColor, 28)
+  const top = varyHexBrightness(baseColor, 18 + Math.round(bucket / 2))
+  const mid = varyHexBrightness(baseColor, 5 + Math.round(bucket / 4))
+  const bottom = varyHexBrightness(baseColor, -15 + Math.round(bucket / 2))
+  const stroke = varyHexBrightness(baseColor, 22 + Math.round(bucket / 4))
+
+  const rim = "rgba(255,255,255,0.22)"
 
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${BALL_TEXTURE_SIZE}" height="${BALL_TEXTURE_SIZE}" viewBox="0 0 ${BALL_TEXTURE_SIZE} ${BALL_TEXTURE_SIZE}">
@@ -83,9 +85,11 @@ function makeBallTextureUri(baseColor: string, brightnessDelta: number) {
           <stop offset="100%" stop-color="${bottom}"/>
         </radialGradient>
       </defs>
-      <circle cx="${BALL_TEXTURE_SIZE / 2}" cy="${BALL_TEXTURE_SIZE / 2}" r="48" fill="url(#g)" stroke="${stroke}" stroke-width="6" opacity="0.98"/>
-      <ellipse cx="42" cy="38" rx="20" ry="14" fill="white" opacity="0.22"/>
-      <ellipse cx="36" cy="44" rx="10" ry="7" fill="white" opacity="0.14"/>
+      <circle cx="${BALL_TEXTURE_SIZE / 2}" cy="${BALL_TEXTURE_SIZE / 2}" r="46" fill="url(#g)" stroke="${stroke}" stroke-width="5" opacity="0.98"/>
+      <!-- subtle rim + highlight (light source from upper-right) -->
+      <circle cx="${BALL_TEXTURE_SIZE / 2}" cy="${BALL_TEXTURE_SIZE / 2}" r="46" fill="none" stroke="${rim}" stroke-width="2" opacity="0.18"/>
+      <ellipse cx="46" cy="34" rx="16" ry="11" fill="white" opacity="0.18"/>
+      <ellipse cx="40" cy="42" rx="9" ry="6" fill="white" opacity="0.10"/>
     </svg>`
 
   return (
@@ -145,18 +149,39 @@ function diffToFeedback(diff: number) {
 }
 
 function diffToColor(diff: number) {
-  if (diff <= 2) return "#2a9d8f"
-  if (diff <= 5) return "#e9c46a"
+  // "Very close" should read as green up to diff <= 3.
+  if (diff === 0) return "#16a34a"
+  if (diff <= 3) return "#2a9d8f"
+  // Medium: yellow/orange band.
+  if (diff <= 6) return "#e9c46a"
   if (diff <= 10) return "#f4a261"
   return "#e63946"
 }
 
 function bestDiffToColor(diff: number) {
   // Distinct palette for the Best box (feels "achievements" oriented)
-  if (diff <= 2) return "#16a34a"
-  if (diff <= 5) return "#2a9d8f"
+  if (diff <= 3) return "#16a34a"
+  if (diff <= 6) return "#2a9d8f"
   if (diff <= 10) return "#457b9d"
   return "#e63946"
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const normalized = hex.replace("#", "")
+  const full =
+    normalized.length === 3
+      ? normalized
+          .split("")
+          .map(ch => ch + ch)
+          .join("")
+      : normalized
+
+  if (full.length !== 6) return `rgba(0,0,0,${alpha})`
+
+  const r = parseInt(full.slice(0, 2), 16)
+  const g = parseInt(full.slice(2, 4), 16)
+  const b = parseInt(full.slice(4, 6), 16)
+  return `rgba(${r},${g},${b},${alpha})`
 }
 
 function clampByte(value: number) {
@@ -199,8 +224,12 @@ export default function GameCanvas() {
   const sceneRef = useRef<HTMLDivElement>(null)
   const glassRef = useRef<HTMLDivElement>(null)
   const earthIconRef = useRef<HTMLSpanElement>(null)
+  const shakeRef = useRef<HTMLDivElement | null>(null)
+  const perfectBurstContainerRef = useRef<HTMLDivElement | null>(null)
+  const rewardBurstContainerRef = useRef<HTMLDivElement | null>(null)
 
   const engineRef = useRef<Matter.Engine | null>(null)
+  const runnerRef = useRef<Matter.Runner | null>(null)
   const ballsRef = useRef<Matter.Body[]>([])
   const ballTextureCacheRef = useRef<Map<string, string>>(new Map())
   const intervalRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -232,6 +261,10 @@ export default function GameCanvas() {
   const [statsPopUpReady, setStatsPopUpReady] = useState(false)
   const [rulesPopUpReady, setRulesPopUpReady] = useState(false)
   const [isSmallScreen, setIsSmallScreen] = useState(false)
+  const [stopDiff, setStopDiff] = useState<number | null>(null)
+  const [stopPulse, setStopPulse] = useState(false)
+  const [perfectBurstId, setPerfectBurstId] = useState(0)
+  const [rewardBurstId, setRewardBurstId] = useState(0)
   // Compact sizing for phones (keeps the layout balanced without scrolling).
   const isCompact = isSmallScreen
 
@@ -355,6 +388,28 @@ export default function GameCanvas() {
     })
   }
 
+  const playStopImpactSound = () => {
+    // A soft, short "thump" to make STOP feel impactful.
+    withAudioContext(ctx => {
+      const now = ctx.currentTime
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+
+      osc.type = "sine"
+      osc.frequency.setValueAtTime(260, now)
+      osc.frequency.exponentialRampToValueAtTime(180, now + 0.05)
+
+      gain.gain.setValueAtTime(0.0001, now)
+      gain.gain.exponentialRampToValueAtTime(0.045, now + 0.01)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09)
+
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(now)
+      osc.stop(now + 0.10)
+    })
+  }
+
   const playBounceSound = () => {
     const nowMs = performance.now()
     if (nowMs - lastBounceAtRef.current < 70) return
@@ -419,12 +474,20 @@ export default function GameCanvas() {
     }, 140)
   }
 
-  const triggerHaptic = (kind: "press" | "stop" | "great") => {
+  const triggerHaptic = (kind: "press" | "stop" | "great" | "near" | "perfect") => {
     if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return
     if (typeof document !== "undefined" && document.visibilityState !== "visible") return
 
     const pattern: number | number[] =
-      kind === "press" ? 24 : kind === "stop" ? 64 : [30, 20, 30]
+      kind === "press"
+        ? 24
+        : kind === "stop"
+        ? 64
+        : kind === "near"
+        ? 96
+        : kind === "perfect"
+        ? [120, 60, 120]
+        : [30, 20, 30]
 
     const now = performance.now()
     const totalDuration = Array.isArray(pattern)
@@ -662,6 +725,7 @@ export default function GameCanvas() {
     World.add(engine.world, [ground, leftWall, rightWall])
 
     const runner = Runner.create()
+    runnerRef.current = runner
 
     Runner.run(runner, engine)
     Render.run(render)
@@ -688,6 +752,7 @@ export default function GameCanvas() {
       Matter.Events.off(engine, "collisionStart", onCollisionStart)
       Runner.stop(runner)
       Render.stop(render)
+      if (runnerRef.current === runner) runnerRef.current = null
       World.clear(engine.world, false)
       Engine.clear(engine)
       render.canvas.remove()
@@ -731,7 +796,8 @@ useEffect(() => {
     const ballOpacity = 0.92 + Math.random() * 0.08
 
     // Shaded "3D-ish" texture (cached) for less-flat-looking balls.
-    const textureKey = `${baseColor}_${Math.round(brightnessDelta / 5) * 5}`
+    const keyBucket = Math.max(-24, Math.min(24, Math.round(brightnessDelta / 3) * 3))
+    const textureKey = `${baseColor}_${keyBucket}`
     let textureUri = ballTextureCacheRef.current.get(textureKey)
     if (!textureUri) {
       textureUri = makeBallTextureUri(baseColor, brightnessDelta)
@@ -888,6 +954,10 @@ useEffect(() => {
     playClickSound()
     triggerHaptic("press") // fallback for keyboard
     setGameFinished(false)
+    setStopDiff(null)
+    setStopPulse(false)
+    setScoreReveal(false)
+    setStopImpact(false)
     setIsCounting(false)
     setCountDisplay(0)
     earthWonThisRunRef.current = false
@@ -939,16 +1009,42 @@ useEffect(() => {
   }
 
   const stopGame = () => {
-    if (isStopping || isCounting || !running) return
+    if (isStopping || !running) return
 
-    // Impact moment: stop new spawns immediately, then reveal the result after a short pause
-    playClickSound()
-    triggerHaptic("stop") // fallback for keyboard
+    // STOP should feel punchy:
+    // 1) Freeze the physics briefly
+    // 2) Then quickly reveal Result + Diff with a pop + color feedback
+    const finalCount = ballsRef.current.length
+    const diff = Math.abs(finalCount - target)
+
+    // Performance band
+    const isPerfect = diff === 0
+    const isClose = diff > 0 && diff <= 3
+    const isMedium = diff > 3 && diff <= 10
+
+    setStopDiff(diff)
+    setStopPulse(false)
+
+    // Haptics + sound on STOP (stronger when close/perfect)
+    if (isPerfect) triggerHaptic("perfect")
+    else if (diff <= 3) triggerHaptic("near")
+    else triggerHaptic("stop")
+
+    playStopImpactSound()
+
+    // Smooth slow-down -> settle -> reveal
+    const rampDownMs = 175 // 150-250ms target
+    const settleHoldMs = 25 // delay before result reveal
+    const popMs = 175 // fade/pop duration
+    const revealAtMs = rampDownMs + settleHoldMs
+    const settleBoostMs = 120
+
     setIsStopping(true)
     setRunning(false)
     setStopImpact(true)
-    setTimeout(() => setStopImpact(false), 320)
+    window.setTimeout(() => setStopImpact(false), revealAtMs + 60)
 
+    // Stop new spawns immediately.
     if (intervalRef.current) {
       clearTimeout(intervalRef.current)
       intervalRef.current = null
@@ -967,58 +1063,134 @@ useEffect(() => {
       countRafRef.current = null
     }
 
-    setTimeout(() => {
-      const finalCount = ballsRef.current.length
-      const durationMs = 2200
-      const startedAt = performance.now()
+    const engine = engineRef.current
+    const prevTimeScale = engine?.timing?.timeScale ?? 1
+    const prevGravityY = engine?.world?.gravity?.y ?? 1
 
-      setIsCounting(true)
-      setCountDisplay(0)
-
+    const rampTimeScale = (from: number, to: number, ms: number) => {
+      if (!engineRef.current) return
+      const start = performance.now()
       const tick = (now: number) => {
-        const t = Math.min(1, (now - startedAt) / durationMs)
-        const eased = 1 - Math.pow(1 - t, 3)
-        const value = Math.round(eased * finalCount)
-        setCountDisplay(value)
+        const t = Math.min(1, (now - start) / ms)
+        const eased = 1 - Math.pow(1 - t, 3) // ease-out
+        if (engineRef.current) {
+          engineRef.current.timing.timeScale = from + (to - from) * eased
+        }
+        if (t < 1) requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    }
+
+    const dampBallsForSettle = () => {
+      const bodies = ballsRef.current
+      for (let i = 0; i < bodies.length; i++) {
+        const b = bodies[i]
+        const v = b.velocity
+        // Gentle damping instead of instant hard-stop.
+        Matter.Body.setVelocity(b, { x: v.x * 0.52, y: v.y * 0.25 })
+        Matter.Body.setAngularVelocity(b, b.angularVelocity * 0.6)
+      }
+    }
+
+    const revealFn = () => {
+      // Reveal + feedback while balls are visually settling.
+      setIsCounting(false)
+      setCountDisplay(finalCount)
+      setGameFinished(true)
+      setAttemptResults(prev => [...prev, diff])
+      setBestDiff(prev => (prev === null ? diff : Math.min(prev, diff)))
+      setAttempt(prev => prev + 1)
+
+      if (isPerfect) setPerfectBurstId(prev => prev + 1)
+      // Small “dopamine” burst for diff 1..5 (very light, not noisy).
+      if (!isPerfect && diff <= 5) setRewardBurstId(prev => prev + 1)
+
+      // Tiny one-shot screen shake at reveal time.
+      if (shakeRef.current && typeof (shakeRef.current as any).animate === "function") {
+        const dx = isPerfect ? 3 : isClose ? 2.5 : 2
+        try {
+          shakeRef.current.animate(
+            [
+              { transform: "translateX(0px)" },
+              { transform: `translateX(-${dx}px)` },
+              { transform: `translateX(${dx}px)` },
+              { transform: "translateX(0px)" }
+            ],
+            { duration: 145, easing: "ease-out", fill: "forwards" }
+          )
+        } catch {}
+      }
+
+      if (diff <= 3) {
+        playSuccessSound()
+        if (isPerfect) window.setTimeout(() => playSuccessSound(), 70)
+      }
+
+      // Visual reward only for decent results (diff <= 5).
+      setStopPulse(diff <= 5)
+      setScoreReveal(true)
+
+      window.setTimeout(() => {
+        setScoreReveal(false)
+        setStopPulse(false)
+        setIsStopping(false)
+      }, popMs)
+
+      if (
+        earthWonThisRunRef.current &&
+        (forceEarthEveryRun || localStorage.getItem(earthWinSeenKey) !== "true")
+      ) {
+        if (!forceEarthEveryRun) localStorage.setItem(earthWinSeenKey, "true")
+        setShowEarthWin(true)
+      }
+    }
+
+    const unfreezeAndDropIntoPlace = () => {
+      if (!engineRef.current) return
+      const mult = isPerfect ? 1.35 : isClose ? 1.22 : isMedium ? 1.16 : 1.1
+      engineRef.current.world.gravity.y = prevGravityY * mult
+
+      // Smoothly bring physics back.
+      rampTimeScale(engineRef.current.timing.timeScale, prevTimeScale, 95)
+
+      window.setTimeout(() => {
+        if (engineRef.current) engineRef.current.world.gravity.y = prevGravityY
+      }, settleBoostMs)
+    }
+
+    // Smoothly slow down instead of instantly stopping.
+    if (engineRef.current) {
+      dampBallsForSettle()
+      const start = performance.now()
+      const from = prevTimeScale
+      const to = 0.08
+
+      const downTick = (now: number) => {
+        const t = Math.min(1, (now - start) / rampDownMs)
+        const eased = 1 - Math.pow(1 - t, 3) // ease-out
+        if (engineRef.current) engineRef.current.timing.timeScale = from + (to - from) * eased
 
         if (t < 1) {
-          countRafRef.current = requestAnimationFrame(tick)
+          // Gentle damping mid-way.
+          if (t > 0.5 && t < 0.55) dampBallsForSettle()
+          requestAnimationFrame(downTick)
           return
         }
 
-        countRafRef.current = null
-        setIsCounting(false)
-        setGameFinished(true)
-
-        const diff = Math.abs(finalCount - target)
-        setAttemptResults(prev => [...prev, diff])
-        setBestDiff(prev => (prev === null ? diff : Math.min(prev, diff)))
-        setAttempt(prev => prev + 1)
-
-      // Reward sound for very low diff
-      if (diff <= 2) {
-        playSuccessSound()
-        triggerHaptic("great")
+        // Hold a bit so the scene feels like it "settles" before UI reveal.
+        window.setTimeout(() => {
+          revealFn()
+          // After reveal starts, let balls drop into place naturally.
+          window.setTimeout(unfreezeAndDropIntoPlace, 40)
+        }, settleHoldMs)
       }
 
-        setScoreReveal(true)
-        setTimeout(() => {
-          setScoreReveal(false)
-          setIsStopping(false)
-        }, 500)
-
-        // Earth orb celebration (only once per day per player)
-        if (
-          earthWonThisRunRef.current &&
-          (forceEarthEveryRun || localStorage.getItem(earthWinSeenKey) !== "true")
-        ) {
-          if (!forceEarthEveryRun) localStorage.setItem(earthWinSeenKey, "true")
-          setShowEarthWin(true)
-        }
-      }
-
-      countRafRef.current = requestAnimationFrame(tick)
-    }, 300)
+      requestAnimationFrame(downTick)
+    } else {
+      window.setTimeout(() => {
+        revealFn()
+      }, revealAtMs)
+    }
 
   }
 
@@ -1056,23 +1228,145 @@ useEffect(() => {
 
   useEffect(() => {
     if (!scoreReveal) return
+    const diff = stopDiff
+    const perf =
+      diff === 0
+        ? "perfect"
+        : diff !== null && diff <= 3
+        ? "close"
+        : diff !== null && diff <= 10
+        ? "medium"
+        : "far"
+
+    // Smooth, natural appearance: 0.95 -> (tiny overshoot) -> 1.0
+    const startScale = 0.95
+    const overScale = perf === "perfect" ? 1.06 : perf === "close" ? 1.035 : perf === "medium" ? 1.015 : 1.01
+
     const elResult = resultValueRef.current
     const elDiff = diffValueRef.current
     elResult?.animate(
       [
-        { opacity: 0, transform: "translateY(4px) scale(0.98)" },
+        { opacity: 0, transform: `translateY(4px) scale(${startScale})` },
+        { opacity: 1, transform: `translateY(0px) scale(${overScale})` },
         { opacity: 1, transform: "translateY(0px) scale(1)" }
       ],
-      { duration: 260, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "forwards" }
+      { duration: 170, easing: "cubic-bezier(0.2, 0.9, 0.2, 1)", fill: "forwards" }
     )
     elDiff?.animate(
       [
-        { opacity: 0, transform: "translateY(4px) scale(0.98)" },
+        { opacity: 0, transform: `translateY(4px) scale(${startScale})` },
+        { opacity: 1, transform: `translateY(0px) scale(${overScale})` },
         { opacity: 1, transform: "translateY(0px) scale(1)" }
       ],
-      { duration: 260, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "forwards" }
+      { duration: 170, easing: "cubic-bezier(0.2, 0.9, 0.2, 1)", fill: "forwards" }
     )
-  }, [scoreReveal])
+  }, [scoreReveal, stopDiff])
+
+  // Subtle perfect celebration burst (no heavy confetti library).
+  useEffect(() => {
+    if (perfectBurstId === 0) return
+    const container = perfectBurstContainerRef.current
+    if (!container) return
+
+    container.innerHTML = ""
+    const colors = ["#16a34a", "#2a9d8f", "#e9c46a"]
+
+    const particles = 14
+    for (let i = 0; i < particles; i++) {
+      const el = document.createElement("span")
+      const left = 0.5 + (Math.random() - 0.5) * 0.28
+      const top = 0.38 + Math.random() * 0.08
+      const color = colors[Math.floor(Math.random() * colors.length)]
+      const width = 4 + Math.random() * 4
+      const height = 2 + Math.random() * 3
+      const rot = Math.random() * 180
+
+      el.style.position = "absolute"
+      el.style.left = `${left * 100}%`
+      el.style.top = `${top * 100}%`
+      el.style.width = `${width}px`
+      el.style.height = `${height}px`
+      el.style.background = color
+      el.style.borderRadius = "2px"
+      el.style.opacity = "1"
+      el.style.transform = `translate(-50%, -50%) rotate(${rot}deg) scale(1)`
+      el.style.pointerEvents = "none"
+
+      container.appendChild(el)
+
+      const fall = 60 + Math.random() * 40
+      const dx = (Math.random() - 0.5) * 40
+      const dur = 520 + Math.random() * 120
+
+      el.animate(
+        [
+          { transform: `translate(-50%, -50%) rotate(${rot}deg) translateX(0px) translateY(0px) scale(1)`, opacity: 1 },
+          { transform: `translate(-50%, -50%) rotate(${rot + 150}deg) translateX(${dx}px) translateY(${fall}px) scale(0.8)`, opacity: 0.0 }
+        ],
+        { duration: dur, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "forwards" }
+      ).onfinish = () => {
+        el.remove()
+      }
+    }
+
+    return () => {
+      container.innerHTML = ""
+    }
+  }, [perfectBurstId])
+
+  // Subtle reward burst for good results (diff <= 5, excluding perfect).
+  useEffect(() => {
+    if (rewardBurstId === 0) return
+    const container = rewardBurstContainerRef.current
+    if (!container) return
+
+    container.innerHTML = ""
+
+    const isGreen = stopDiff !== null && stopDiff <= 3
+    const colors = isGreen ? ["#2a9d8f", "#16a34a"] : ["#e9c46a", "#f4a261"]
+
+    const particles = 10
+    for (let i = 0; i < particles; i++) {
+      const el = document.createElement("span")
+      const left = 0.5 + (Math.random() - 0.5) * 0.22
+      const top = 0.42 + Math.random() * 0.08
+      const color = colors[Math.floor(Math.random() * colors.length)]
+      const width = 3 + Math.random() * 4
+      const height = 2 + Math.random() * 3
+      const rot = Math.random() * 180
+
+      el.style.position = "absolute"
+      el.style.left = `${left * 100}%`
+      el.style.top = `${top * 100}%`
+      el.style.width = `${width}px`
+      el.style.height = `${height}px`
+      el.style.background = color
+      el.style.borderRadius = "2px"
+      el.style.opacity = "0.95"
+      el.style.transform = `translate(-50%, -50%) rotate(${rot}deg) scale(1)`
+      el.style.pointerEvents = "none"
+
+      container.appendChild(el)
+
+      const fall = 50 + Math.random() * 40
+      const dx = (Math.random() - 0.5) * 28
+      const dur = 420 + Math.random() * 90
+
+      el.animate(
+        [
+          { transform: `translate(-50%, -50%) rotate(${rot}deg) translateX(0px) translateY(0px) scale(1)`, opacity: 1 },
+          { transform: `translate(-50%, -50%) rotate(${rot + 120}deg) translateX(${dx}px) translateY(${fall}px) scale(0.8)`, opacity: 0.0 }
+        ],
+        { duration: dur, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "forwards" }
+      ).onfinish = () => {
+        el.remove()
+      }
+    }
+
+    return () => {
+      container.innerHTML = ""
+    }
+  }, [rewardBurstId, stopDiff])
 
  const shareResult = async () => {
 
@@ -1209,6 +1503,20 @@ const revealStyle = gameFinished
   const hasBestNumber = bestDiff !== null
   const bestNumberColor = hasBestNumber ? bestDiffToColor(bestDiff as number) : "#16a34a"
 
+  // STOP moment feedback (near-miss + perfect)
+  const stopIsPerfect = stopDiff !== null && stopDiff === 0
+  const stopIsClose = stopDiff !== null && stopDiff > 0 && stopDiff <= 3
+  const stopIsMedium = stopDiff !== null && stopDiff > 3 && stopDiff <= 5
+  const stopIsFar = stopDiff !== null && stopDiff > 5
+
+  const stopPulseColor = stopIsPerfect
+    ? "#16a34a"
+    : stopIsClose
+    ? "#2a9d8f"
+    : stopIsMedium
+    ? "#e9c46a"
+    : theme.text
+
   useEffect(() => {
     if (!feedbackMessage) {
       setShowFeedback(false)
@@ -1238,6 +1546,7 @@ const revealStyle = gameFinished
   return (
 
     <div
+      ref={shakeRef}
       style={{
         display:"flex",
         flexDirection:"column",
@@ -1252,13 +1561,35 @@ const revealStyle = gameFinished
     >
 
      <div
+       ref={perfectBurstContainerRef}
+       aria-hidden="true"
+       style={{
+         position:"absolute",
+         inset:0,
+         pointerEvents:"none",
+         zIndex:4
+       }}
+     />
+
+     <div
+       ref={rewardBurstContainerRef}
+       aria-hidden="true"
+       style={{
+         position:"absolute",
+         inset:0,
+         pointerEvents:"none",
+         zIndex:4
+       }}
+     />
+
+     <div
   style={{
     textAlign:"center",
-    marginBottom:isCompact ? "2px" : "8px"
+    marginBottom:isCompact ? "1px" : "6px"
   }}
 >
 
-<div style={{textAlign:"center", marginBottom:isCompact ? "2px" : "8px"}}>
+<div style={{textAlign:"center", marginBottom:isCompact ? "1px" : "6px"}}>
 
   {/* Orbidrop + Streak + Info/Stats */}
 
@@ -1350,16 +1681,69 @@ const revealStyle = gameFinished
     </div>
   </div>
 
+  {/* Next challenge countdown (subtle urgency) */}
+  <div
+    style={{
+      marginTop: isCompact ? "0px" : "0px",
+      fontSize: isCompact ? "12px" : "13px",
+      color: theme.muted,
+      opacity: 0.92,
+      fontWeight: 700,
+      letterSpacing: "-0.01em",
+      padding: isCompact ? "2px 8px" : "3px 10px",
+      borderRadius: "999px",
+      background: darkMode
+        ? "linear-gradient(to bottom, rgba(255,255,255,0.05), rgba(255,255,255,0.02))"
+        : "linear-gradient(to bottom, rgba(0,0,0,0.03), rgba(0,0,0,0.015))",
+      border: darkMode ? "1px solid rgba(255,255,255,0.06)" : "1px solid rgba(0,0,0,0.05)",
+      boxShadow: darkMode ? "0 1px 2px rgba(0,0,0,0.28)" : "0 1px 2px rgba(0,0,0,0.06)",
+      textAlign: "center"
+    }}
+  >
+    New challenge in {timeLeft}
+  </div>
+
   {/* Target */}
 
   <div
     style={{
-      marginTop: isCompact ? "2px" : "4px",
+      marginTop: isCompact ? "0px" : "2px",
       display: "inline-block",
       padding: isCompact ? "3px 8px" : "4px 10px",
       borderRadius: "8px",
-      background: theme.cardLight,
-      boxShadow: darkMode ? "0 1px 3px rgba(0,0,0,0.2)" : "0 1px 3px rgba(0,0,0,0.06)",
+      background:
+        stopPulse && stopDiff !== null && stopDiff <= 5
+          ? stopIsClose
+            ? darkMode
+              ? `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.18)} 0%, ${hexToRgba(
+                  stopPulseColor,
+                  0.07
+                )} 70%)`
+              : `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.12)} 0%, ${hexToRgba(
+                  stopPulseColor,
+                  0.05
+                )} 70%)`
+            : // Reward band (diff 4-5): lighter, more subtle tint
+              darkMode
+            ? `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.13)} 0%, ${hexToRgba(
+                stopPulseColor,
+                0.05
+              )} 70%)`
+            : `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.09)} 0%, ${hexToRgba(
+                stopPulseColor,
+                0.035
+              )} 70%)`
+          : theme.cardLight,
+      boxShadow:
+        stopPulse && stopDiff !== null && stopDiff <= 5
+          ? stopIsPerfect
+            ? `0 0 0 3px ${hexToRgba(stopPulseColor, 0.16)}, 0 10px 26px rgba(0,0,0,0.04)`
+            : stopIsClose
+            ? `0 0 0 2px ${hexToRgba(stopPulseColor, 0.12)}, 0 10px 26px rgba(0,0,0,0.04)`
+            : `0 0 0 2px ${hexToRgba(stopPulseColor, 0.10)}, 0 10px 26px rgba(0,0,0,0.03)`
+          : darkMode
+            ? "0 1px 3px rgba(0,0,0,0.2)"
+            : "0 1px 3px rgba(0,0,0,0.06)",
       fontWeight: "500",
       fontSize: "13px",
       color: theme.muted,
@@ -1371,9 +1755,9 @@ const revealStyle = gameFinished
 
   {/* Attempts */}
 
-  <div style={{marginTop:isCompact ? "2px" : "8px"}}>
+  <div style={{marginTop:isCompact ? "0px" : "6px"}}>
 
-    <div style={{fontSize:isCompact ? "11px" : "12px", color: theme.muted, marginBottom:isCompact ? "2px" : "4px"}}>
+    <div style={{fontSize:isCompact ? "11px" : "12px", color: theme.muted, marginBottom:isCompact ? "1px" : "3px"}}>
       Attempts
     </div>
 
@@ -1436,7 +1820,7 @@ const revealStyle = gameFinished
     display:"flex",
     justifyContent:"center",
     gap: isCompact ? "6px" : "8px",
-    marginTop: isCompact ? "3px" : "5px"
+    marginTop: isCompact ? "1px" : "3px"
   }}
 >
 
@@ -1444,30 +1828,58 @@ const revealStyle = gameFinished
 
   <div
     style={{
-      background: theme.card,
+      background: darkMode
+        ? "linear-gradient(to bottom, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.00) 58%)," +
+          theme.card
+        : "linear-gradient(to bottom, rgba(0,0,0,0.025) 0%, rgba(0,0,0,0.00) 58%)," +
+          theme.card,
       padding: isCompact ? "4px 8px" : "6px 12px",
       borderRadius:"10px",
       fontSize: isCompact ? "12px" : "14px",
       minWidth: isCompact ? "56px" : "70px",
+      minHeight: isCompact ? "34px" : "40px",
       textAlign:"center",
-      border:`1px solid ${theme.border}`,
-      boxShadow: darkMode ? "0 1px 3px rgba(0,0,0,0.3)" : "0 1px 3px rgba(0,0,0,0.06)",
+      display:"flex",
+      flexDirection:"column",
+      alignItems:"center",
+      justifyContent:"center",
+      gap: isCompact ? "1px" : "2px",
+      lineHeight:1,
+      border:
+        stopPulse && stopDiff !== null && stopDiff <= 5
+          ? `1px solid ${hexToRgba(stopPulseColor, darkMode ? 0.38 : 0.30)}`
+          : `1px solid ${darkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.045)"}`,
+      boxShadow:
+        stopPulse && stopDiff !== null && stopDiff <= 5
+          ? stopIsPerfect
+            ? `0 0 0 2px ${hexToRgba(stopPulseColor, 0.16)}, 0 10px 26px rgba(0,0,0,0.04)`
+            : `0 0 0 2px ${hexToRgba(stopPulseColor, 0.13)}, 0 10px 26px rgba(0,0,0,0.04)`
+          : darkMode
+          ? "0 2px 8px rgba(0,0,0,0.22)"
+          : "0 2px 8px rgba(0,0,0,0.05)",
       transform: isCounting
         ? "translateY(-2px) scale(1.12)"
         : scoreReveal
-        ? "translateY(-3px) scale(1.26)"
+        ? stopIsPerfect
+          ? "translateY(-2px) scale(1.08)"
+          : stopIsClose
+          ? "translateY(-1.5px) scale(1.05)"
+          : stopIsMedium
+          ? "translateY(-1px) scale(1.03)"
+          : "scale(1)"
         : "scale(1)",
       transition:
-        "transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
+        "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
     }}
   >
-    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2}}>
+    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2, lineHeight:1}}>
       Result
     </div>
     <div
       ref={resultValueRef}
       style={{
         fontWeight:"600",
+        lineHeight:1,
         color: hasResultNumbers
           ? isCounting
             ? countingDiffColor
@@ -1484,30 +1896,58 @@ const revealStyle = gameFinished
 
   <div
     style={{
-      background: theme.card,
+      background: darkMode
+        ? "linear-gradient(to bottom, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.00) 58%)," +
+          theme.card
+        : "linear-gradient(to bottom, rgba(0,0,0,0.025) 0%, rgba(0,0,0,0.00) 58%)," +
+          theme.card,
       padding: isCompact ? "4px 8px" : "6px 12px",
       borderRadius:"10px",
       fontSize: isCompact ? "12px" : "14px",
       minWidth: isCompact ? "56px" : "70px",
+      minHeight: isCompact ? "34px" : "40px",
       textAlign:"center",
-      border:`1px solid ${theme.border}`,
-      boxShadow: darkMode ? "0 1px 3px rgba(0,0,0,0.3)" : "0 1px 3px rgba(0,0,0,0.06)",
+      display:"flex",
+      flexDirection:"column",
+      alignItems:"center",
+      justifyContent:"center",
+      gap: isCompact ? "1px" : "2px",
+      lineHeight:1,
+      border:
+        stopPulse && stopDiff !== null && stopDiff <= 5
+          ? `1px solid ${hexToRgba(stopPulseColor, darkMode ? 0.38 : 0.30)}`
+          : `1px solid ${darkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.045)"}`,
+      boxShadow:
+        stopPulse && stopDiff !== null && stopDiff <= 5
+          ? stopIsPerfect
+            ? `0 0 0 2px ${hexToRgba(stopPulseColor, 0.16)}, 0 10px 26px rgba(0,0,0,0.04)`
+            : `0 0 0 2px ${hexToRgba(stopPulseColor, 0.13)}, 0 10px 26px rgba(0,0,0,0.04)`
+          : darkMode
+          ? "0 2px 8px rgba(0,0,0,0.22)"
+          : "0 2px 8px rgba(0,0,0,0.05)",
       transform: isCounting
         ? "translateY(-2px) scale(1.12)"
         : scoreReveal
-        ? "translateY(-3px) scale(1.26)"
+        ? stopIsPerfect
+          ? "translateY(-2px) scale(1.08)"
+          : stopIsClose
+          ? "translateY(-1.5px) scale(1.05)"
+          : stopIsMedium
+          ? "translateY(-1px) scale(1.03)"
+          : "scale(1)"
         : "scale(1)",
       transition:
-        "transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
+        "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
     }}
   >
-    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2}}>
+    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2, lineHeight:1}}>
       Diff
     </div>
     <div
       ref={diffValueRef}
       style={{
         fontWeight:"600",
+        lineHeight:1,
         color: hasResultNumbers
           ? isCounting
             ? countingDiffColor
@@ -1524,24 +1964,36 @@ const revealStyle = gameFinished
 
   <div
     style={{
-      background: theme.card,
+      background: darkMode
+        ? "linear-gradient(to bottom, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.00) 58%)," +
+          theme.card
+        : "linear-gradient(to bottom, rgba(0,0,0,0.025) 0%, rgba(0,0,0,0.00) 58%)," +
+          theme.card,
       padding: isCompact ? "4px 8px" : "6px 12px",
       borderRadius:"10px",
       fontSize: isCompact ? "12px" : "14px",
       minWidth: isCompact ? "56px" : "70px",
+      minHeight: isCompact ? "34px" : "40px",
       textAlign:"center",
-      border:`1px solid ${theme.border}`,
-      boxShadow: darkMode ? "0 1px 3px rgba(0,0,0,0.3)" : "0 1px 3px rgba(0,0,0,0.06)",
+      display:"flex",
+      flexDirection:"column",
+      alignItems:"center",
+      justifyContent:"center",
+      gap: isCompact ? "1px" : "2px",
+      lineHeight:1,
+      border:`1px solid ${darkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.045)"}`,
+      boxShadow: darkMode ? "0 2px 8px rgba(0,0,0,0.22)" : "0 2px 8px rgba(0,0,0,0.05)",
       transition:
         "background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease"
     }}
   >
-    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2}}>
+    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2, lineHeight:1}}>
       Best
     </div>
     <div
       style={{
         fontWeight:"600",
+        lineHeight:1,
         color: hasBestNumber
           ? bestNumberColor
           : undefined,
@@ -1557,7 +2009,7 @@ const revealStyle = gameFinished
         <hr
           style={{
             width:`${playfieldWidth}px`,
-            margin:isCompact ? "2px 0" : "6px 0",
+            margin:isCompact ? "0px 0" : "1px 0",
             border:"none",
             height:"1px",
             background: darkMode
@@ -1572,7 +2024,7 @@ const revealStyle = gameFinished
         style={{
           width: `${playfieldWidth}px`,
           height: `${playfieldHeight}px`,
-          marginTop: isCompact ? "2px" : "6px",
+          marginTop: isCompact ? "0px" : "2px",
           position: "relative",
           borderRadius: "0 0 16px 16px",
           boxShadow: darkMode
@@ -1585,7 +2037,7 @@ const revealStyle = gameFinished
           aria-hidden="true"
           style={{
             position: "absolute",
-            inset: "-10px -10px -14px -10px",
+            inset: "-18px -10px -14px -10px",
             borderRadius: "18px",
             background: darkMode
               ? "radial-gradient(circle at center, rgba(0,0,0,0) 58%, rgba(0,0,0,0.14) 100%)"
@@ -1747,22 +2199,22 @@ const revealStyle = gameFinished
             top: "28%",
             left: "50%",
             transform: `translate(-50%, -50%) scale(${
-              running && !isCounting ? 1.05 : 1
+              running && !isCounting ? 1.03 : 1
             })`,
             fontSize: isCompact ? "118px" : "138px",
             fontWeight: "800",
             color: theme.feedbackText,
             opacity:
               running && !isCounting
-                ? 0.12
+                ? 0.1
                 : stopImpact || dropImpact
-                ? 0.16
-                : 0.18,
+                ? 0.14
+                : 0.16,
             textShadow: darkMode
-              ? "0 0 18px rgba(255,255,255,0.12), 0 0 10px rgba(255,255,255,0.08), 0 2px 8px rgba(0,0,0,0.35)"
-              : "0 0 18px rgba(255,255,255,0.2), 0 0 10px rgba(255,255,255,0.1), 0 2px 10px rgba(0,0,0,0.06)",
+              ? "0 0 18px rgba(255,255,255,0.10), 0 0 10px rgba(255,255,255,0.06), 0 2px 8px rgba(0,0,0,0.32)"
+              : "0 0 18px rgba(255,255,255,0.16), 0 0 10px rgba(255,255,255,0.08), 0 2px 10px rgba(0,0,0,0.05)",
             letterSpacing: "-0.02em",
-            filter: "blur(0.35px)",
+            filter: "blur(0.45px)",
             pointerEvents: "none",
             transition: "transform 200ms ease, opacity 200ms ease"
           }}
@@ -1856,9 +2308,9 @@ const revealStyle = gameFinished
         }}
         disabled={isCounting || isStopping}
         style={{
-          marginTop:isCompact ? "4px" : "10px",
-          padding:isCompact ? "12px 28px" : "14px 40px",
-          fontSize:"20px",
+          marginTop:isCompact ? "1px" : "4px",
+          padding:isCompact ? "16px 34px" : "18px 50px",
+          fontSize:"24px",
           border:"none",
           borderRadius:"10px",
           color: isCounting || isStopping ? "#ddd" : "white",
@@ -1871,8 +2323,8 @@ const revealStyle = gameFinished
             ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #ef5a66 0%, #e63946 100%)"
             : "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #39b2a2 0%, #2a9d8f 100%)",
           cursor: isCounting || isStopping ? "default" : "pointer",
-          minWidth:"140px",
-          minHeight:"52px",
+          minWidth:"160px",
+          minHeight:"64px",
           touchAction:"manipulation",
           willChange:"transform, box-shadow, filter",
           transform: actionButtonPressed
@@ -1884,8 +2336,8 @@ const revealStyle = gameFinished
           boxShadow: actionButtonPressed
             ? "0 2px 6px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.18)"
             : actionButtonHovered
-            ? "0 14px 34px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.30)"
-            : "0 10px 26px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.24)",
+            ? "0 16px 40px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.30)"
+            : "0 14px 34px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.22)",
           transition:
             "transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 120ms ease, filter 120ms ease"
         }}
@@ -2074,7 +2526,7 @@ const revealStyle = gameFinished
             </button>
 
             <p style={{marginTop:"16px",fontSize:"14px",color: theme.modalMuted,fontWeight:"bold"}}>
-             Next Orbidrop in {timeLeft}
+              New challenge in {timeLeft}
             </p>
 
           </div>
