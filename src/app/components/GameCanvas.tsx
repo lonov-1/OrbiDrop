@@ -62,6 +62,37 @@ const EARTH_TEXTURE_DATA_URI =
 
 const EARTH_DROP_KEY_PREFIX = "orbifallEarthDrop:"
 const PLAYER_ID_KEY = "orbifallPlayerId"
+const BALL_TEXTURE_SIZE = 100
+
+function makeBallTextureUri(baseColor: string, brightnessDelta: number) {
+  // Bucket brightness a bit to keep caching effective.
+  const bucket = Math.max(-20, Math.min(20, Math.round(brightnessDelta / 5) * 5))
+
+  // Create a subtle "3D" look: radial gradient + soft highlight.
+  const top = varyHexBrightness(baseColor, 22 + bucket)
+  const mid = varyHexBrightness(baseColor, 6 + Math.round(bucket / 2))
+  const bottom = varyHexBrightness(baseColor, -12 + bucket)
+  const stroke = varyHexBrightness(baseColor, 28)
+
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${BALL_TEXTURE_SIZE}" height="${BALL_TEXTURE_SIZE}" viewBox="0 0 ${BALL_TEXTURE_SIZE} ${BALL_TEXTURE_SIZE}">
+      <defs>
+        <radialGradient id="g" cx="30%" cy="25%" r="75%">
+          <stop offset="0%" stop-color="${top}"/>
+          <stop offset="55%" stop-color="${mid}"/>
+          <stop offset="100%" stop-color="${bottom}"/>
+        </radialGradient>
+      </defs>
+      <circle cx="${BALL_TEXTURE_SIZE / 2}" cy="${BALL_TEXTURE_SIZE / 2}" r="48" fill="url(#g)" stroke="${stroke}" stroke-width="6" opacity="0.98"/>
+      <ellipse cx="42" cy="38" rx="20" ry="14" fill="white" opacity="0.22"/>
+      <ellipse cx="36" cy="44" rx="10" ry="7" fill="white" opacity="0.14"/>
+    </svg>`
+
+  return (
+    "data:image/svg+xml;charset=utf-8," +
+    encodeURIComponent(svg)
+  )
+}
 
 function getStorageItem(key: string) {
   if (typeof window === "undefined") return null
@@ -171,6 +202,7 @@ export default function GameCanvas() {
 
   const engineRef = useRef<Matter.Engine | null>(null)
   const ballsRef = useRef<Matter.Body[]>([])
+  const ballTextureCacheRef = useRef<Map<string, string>>(new Map())
   const intervalRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const spawnBallTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const earthSpawnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -696,9 +728,18 @@ useEffect(() => {
 
     const baseColor = BALL_COLORS[Math.floor(Math.random() * BALL_COLORS.length)]
     const brightnessDelta = Math.floor(Math.random() * 24) - 10
-    const fillColor = varyHexBrightness(baseColor, brightnessDelta)
-    const strokeColor = varyHexBrightness(baseColor, 28)
     const ballOpacity = 0.92 + Math.random() * 0.08
+
+    // Shaded "3D-ish" texture (cached) for less-flat-looking balls.
+    const textureKey = `${baseColor}_${Math.round(brightnessDelta / 5) * 5}`
+    let textureUri = ballTextureCacheRef.current.get(textureKey)
+    if (!textureUri) {
+      textureUri = makeBallTextureUri(baseColor, brightnessDelta)
+      ballTextureCacheRef.current.set(textureKey, textureUri)
+    }
+
+    const xScale = (radius * 2) / BALL_TEXTURE_SIZE
+    const yScale = xScale
 
     const ball = Matter.Bodies.circle(
       playfieldWidth / 2 + (Math.random() * 80 - 40),
@@ -710,9 +751,11 @@ useEffect(() => {
         frictionAir: 0.002,
         density: 0.001,
         render: {
-          fillStyle: fillColor,
-          strokeStyle: strokeColor,
-          lineWidth: 1.2,
+          sprite: {
+            texture: textureUri,
+            xScale,
+            yScale
+          },
           opacity: ballOpacity
         }
       }
