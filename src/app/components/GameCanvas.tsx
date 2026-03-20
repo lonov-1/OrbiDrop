@@ -1617,10 +1617,26 @@ const revealStyle = gameFinished
               left: 0,
               right: 0,
               bottom: 0,
-              height: "34px",
+              height: "46px",
               background: darkMode
-                ? "linear-gradient(to top, rgba(0,0,0,0.22), rgba(0,0,0,0.00))"
-                : "linear-gradient(to top, rgba(0,0,0,0.08), rgba(0,0,0,0.00))",
+                ? "linear-gradient(to top, rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.14) 45%, rgba(0,0,0,0.00) 100%)"
+                : "linear-gradient(to top, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0.05) 45%, rgba(0,0,0,0.00) 100%)",
+              filter: "blur(0.25px)",
+              pointerEvents: "none",
+              zIndex: 0
+            }}
+          />
+
+          {/* Thin base line: makes the bottom feel like a settling surface */}
+          <div
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: "3px",
+              background: darkMode ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.05)",
               pointerEvents: "none",
               zIndex: 0
             }}
