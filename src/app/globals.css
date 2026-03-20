@@ -14,17 +14,27 @@
 /* Light theme background: extremely soft depth, minimal distraction */
 html,
 body {
-  background: linear-gradient(
-    180deg,
-    #f6f6f6 0%,
-    #ffffff 55%,
-    #ffffff 100%
-  ) !important;
+  background: radial-gradient(
+      circle at center,
+      rgba(0, 0, 0, 0) 55%,
+      rgba(0, 0, 0, 0.04) 100%
+    ),
+    linear-gradient(
+      180deg,
+      #f6f6f6 0%,
+      #ffffff 55%,
+      #ffffff 100%
+    ) !important;
 }
 
 [data-theme="dark"] html,
 [data-theme="dark"] body {
-  background: var(--background) !important;
+  background: radial-gradient(
+      circle at center,
+      rgba(0, 0, 0, 0) 55%,
+      rgba(0, 0, 0, 0.35) 100%
+    ),
+    var(--background) !important;
 }
 
 @theme inline {
