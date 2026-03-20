@@ -188,6 +188,7 @@ export default function GameCanvas() {
   const [isStopping, setIsStopping] = useState(false)
   const [countDisplay, setCountDisplay] = useState(0)
   const [showStats, setShowStats] = useState(false)
+  const [statsDismissed, setStatsDismissed] = useState(false)
   const [showEarthWin, setShowEarthWin] = useState(false)
   const [stopImpact, setStopImpact] = useState(false)
   const [dropImpact, setDropImpact] = useState(false)
@@ -469,7 +470,7 @@ export default function GameCanvas() {
   }, [gameOver, bestDiff])
 
   useEffect(() => {
-    if (!gameOver || bestDiff === null || showStats) return
+    if (!gameOver || bestDiff === null || showStats || statsDismissed) return
 
     // Give the final result/diff/reveal a moment to finish
     // before mounting the full Statistics modal.
@@ -479,7 +480,7 @@ export default function GameCanvas() {
     }, delayMs)
 
     return () => window.clearTimeout(t)
-  }, [gameOver, bestDiff, showStats, isSmallScreen])
+  }, [gameOver, bestDiff, showStats, statsDismissed, isSmallScreen])
 
   useEffect(() => {
     if (!showStats) {
@@ -965,7 +966,7 @@ useEffect(() => {
       if (isCounting || isStopping) return
       e.preventDefault()
       if (gameOver) {
-        setShowStats(true)
+        if (!statsDismissed) setShowStats(true)
         return
       }
       if (running) stopGame()
@@ -973,7 +974,17 @@ useEffect(() => {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [gameOver, running, isCounting, isStopping, showRules, showStats, isEarthDropPlayerToday])
+  }, [
+    gameOver,
+    running,
+    isCounting,
+    isStopping,
+    isSmallScreen,
+    statsDismissed,
+    showRules,
+    showStats,
+    isEarthDropPlayerToday
+  ])
 
   useEffect(() => {
     if (!scoreReveal) return
@@ -1630,7 +1641,7 @@ const revealStyle = gameFinished
         onClick={() => {
           triggerActionButtonFeedback()
           if (gameOver) {
-            setShowStats(true)
+            if (!statsDismissed) setShowStats(true)
             return
           }
           if (running) {
@@ -1729,7 +1740,10 @@ const revealStyle = gameFinished
 
             <button
               type="button"
-              onClick={() => setShowStats(false)}
+              onClick={() => {
+                setShowStats(false)
+                setStatsDismissed(true)
+              }}
               aria-label="Close stats"
               style={{
                 position:"absolute",
