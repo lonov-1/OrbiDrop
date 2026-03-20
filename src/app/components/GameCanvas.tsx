@@ -1748,7 +1748,9 @@ const revealStyle = gameFinished
             display:"flex",
             alignItems:"flex-start",
             justifyContent:"center",
-            paddingTop: isSmallScreen ? "16vh" : "18vh",
+            paddingTop: isSmallScreen
+              ? "calc(16vh + env(safe-area-inset-top))"
+              : "calc(18vh + env(safe-area-inset-top))",
             zIndex:10000
           }}
           onMouseDown={(e) => {
@@ -1783,8 +1785,8 @@ const revealStyle = gameFinished
               aria-label="Close stats"
               style={{
                 position:"absolute",
-                top:"8px",
-                right:"8px",
+                top:"calc(8px + env(safe-area-inset-top))",
+                right:"calc(8px + env(safe-area-inset-right))",
                 width:"34px",
                 height:"34px",
                 display:"flex",
@@ -1937,7 +1939,7 @@ const revealStyle = gameFinished
             alignItems:"center",
             justifyContent:"center",
             zIndex:10000,
-            padding:"16px"
+            padding:"max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))"
           }}
         >
           <div
@@ -1958,8 +1960,8 @@ const revealStyle = gameFinished
               aria-label="Close Global Orb popup"
               style={{
                 position:"absolute",
-                top:"10px",
-                right:"10px",
+                top:"calc(10px + env(safe-area-inset-top))",
+                right:"calc(10px + env(safe-area-inset-right))",
                 border:"none",
                 background:"transparent",
                 cursor:"pointer",
@@ -2012,7 +2014,7 @@ const revealStyle = gameFinished
             alignItems:"center",
             justifyContent:"center",
             zIndex:10000,
-            padding:"16px"
+            padding:"max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))"
           }}
           onMouseDown={(e) => {
             if (e.target !== e.currentTarget) return
@@ -2130,8 +2132,12 @@ const revealStyle = gameFinished
           <div
             style={{
               position: "fixed",
-              right: isSmallScreen ? "10px" : "14px",
-              bottom: isSmallScreen ? "10px" : "18px",
+              right: isSmallScreen
+                ? "calc(10px + env(safe-area-inset-right))"
+                : "calc(14px + env(safe-area-inset-right))",
+              bottom: isSmallScreen
+                ? "calc(10px + env(safe-area-inset-bottom))"
+                : "calc(18px + env(safe-area-inset-bottom))",
               display: "flex",
               gap: "8px",
               alignItems: "center",
