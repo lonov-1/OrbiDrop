@@ -485,7 +485,14 @@ export default function GameCanvas() {
   }, [gameOver, bestDiff])
 
   useEffect(() => {
-    if (!gameOver || bestDiff === null || showStats || statsAutoOpened) return
+    if (
+      !gameOver ||
+      bestDiff === null ||
+      showStats ||
+      statsAutoOpened ||
+      statsDismissed
+    )
+      return
 
     // Give the final result/diff/reveal a moment to finish
     // before mounting the full Statistics modal.
@@ -982,10 +989,9 @@ useEffect(() => {
       if (isCounting || isStopping) return
       e.preventDefault()
       if (gameOver) {
-        if (!statsDismissed) {
-          setStatsAutoOpened(true)
-          setShowStats(true)
-        }
+        setStatsDismissed(false)
+        setStatsAutoOpened(true)
+        setShowStats(true)
         return
       }
       if (running) stopGame()
@@ -1254,7 +1260,7 @@ const revealStyle = gameFinished
         <button
           type="button"
           onClick={() => {
-            if (statsDismissed) return
+            setStatsDismissed(false)
             setStatsAutoOpened(true)
             setShowStats(true)
           }}
@@ -1663,10 +1669,12 @@ const revealStyle = gameFinished
       <button
         onClick={() => {
           triggerActionButtonFeedback()
-          if (gameOver) {
-            if (!statsDismissed) setShowStats(true)
-            return
-          }
+      if (gameOver) {
+        setStatsDismissed(false)
+        setStatsAutoOpened(true)
+        setShowStats(true)
+        return
+      }
           if (running) {
             stopGame()
           } else {
