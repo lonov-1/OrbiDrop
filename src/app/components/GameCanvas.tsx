@@ -1903,9 +1903,11 @@ const revealStyle = gameFinished
                 padding:"12px 26px",
                 borderRadius:"10px",
                 border:"none",
-                background:"#457b9d",
+                backgroundImage:"linear-gradient(180deg, #39b2a2 0%, #2a9d8f 100%)",
+                background:"#2a9d8f",
                 color:"white",
                 cursor:"pointer",
+                boxShadow:"0 10px 26px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.22)",
                 fontSize:"16px"
               }}
             >
