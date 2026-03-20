@@ -185,6 +185,7 @@ export default function GameCanvas() {
   const [scoreReveal, setScoreReveal] = useState(false)
   const [showRules, setShowRules] = useState(false)
   const [isCounting, setIsCounting] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
   const [countDisplay, setCountDisplay] = useState(0)
   const [showStats, setShowStats] = useState(false)
   const [showEarthWin, setShowEarthWin] = useState(false)
@@ -367,7 +368,7 @@ export default function GameCanvas() {
   }
 
   const triggerActionButtonFeedback = () => {
-    if (isCounting) return
+          if (isCounting || isStopping) return
 
     setActionButtonPressed(true)
     if (actionButtonPressTimeoutRef.current) {
@@ -804,7 +805,7 @@ useEffect(() => {
 
   const startGame = () => {
 
-    if (running || gameOver || isCounting) return
+    if (running || gameOver || isCounting || isStopping) return
 
     // Impact moment for DROP
     setDropImpact(true)
@@ -864,11 +865,12 @@ useEffect(() => {
   }
 
   const stopGame = () => {
-    if (isCounting || !running) return
+    if (isStopping || isCounting || !running) return
 
     // Impact moment: stop new spawns immediately, then reveal the result after a short pause
     playClickSound()
     triggerHaptic("stop") // fallback for keyboard
+    setIsStopping(true)
     setRunning(false)
     setStopImpact(true)
     setTimeout(() => setStopImpact(false), 320)
@@ -928,6 +930,7 @@ useEffect(() => {
         setScoreReveal(true)
         setTimeout(() => {
           setScoreReveal(false)
+          setIsStopping(false)
         }, 500)
 
         // Earth orb celebration (only once per day per player)
@@ -952,7 +955,7 @@ useEffect(() => {
       const el = e.target as HTMLElement
       if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return
       if (showRules || showStats) return
-      if (isCounting) return
+      if (isCounting || isStopping) return
       e.preventDefault()
       if (gameOver) {
         setShowStats(true)
@@ -963,7 +966,7 @@ useEffect(() => {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [gameOver, running, isCounting, showRules, showStats, isEarthDropPlayerToday])
+  }, [gameOver, running, isCounting, isStopping, showRules, showStats, isEarthDropPlayerToday])
 
   useEffect(() => {
     if (!scoreReveal) return
@@ -1630,7 +1633,7 @@ const revealStyle = gameFinished
           }
         }}
         onPointerDown={() => {
-          if (isCounting) return
+          if (isCounting || isStopping) return
           // Haptic at touch start maximizes mobile support (user-gesture context)
           if (gameOver) triggerHaptic("press")
           else if (running) triggerHaptic("stop")
@@ -1645,22 +1648,23 @@ const revealStyle = gameFinished
           setActionButtonHovered(false)
           setActionButtonPressed(false)
         }}
-        disabled={isCounting}
+        disabled={isCounting || isStopping}
         style={{
           marginTop:isCompact ? "4px" : "10px",
           padding:isCompact ? "12px 28px" : "14px 40px",
           fontSize:"20px",
           border:"none",
           borderRadius:"10px",
-          color: isCounting ? "#ddd" : "white",
-          background: isCounting
-            ? "linear-gradient(180deg, #8b939b 0%, #6c757d 100%)"
+          color: isCounting || isStopping ? "#ddd" : "white",
+          // Subtle highlight overlay + state color gradient.
+          backgroundImage: isCounting || isStopping
+            ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #8b939b 0%, #6c757d 100%)"
             : gameOver
-            ? "linear-gradient(180deg, #5a8cad 0%, #457b9d 100%)"
+            ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #5a8cad 0%, #457b9d 100%)"
             : running
-            ? "linear-gradient(180deg, #ef5a66 0%, #e63946 100%)"
-            : "linear-gradient(180deg, #39b2a2 0%, #2a9d8f 100%)",
-          cursor: isCounting ? "default" : "pointer",
+            ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #ef5a66 0%, #e63946 100%)"
+            : "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #39b2a2 0%, #2a9d8f 100%)",
+          cursor: isCounting || isStopping ? "default" : "pointer",
           minWidth:"140px",
           minHeight:"52px",
           touchAction:"manipulation",
@@ -1672,15 +1676,15 @@ const revealStyle = gameFinished
             : "scale(1)",
           filter: actionButtonPressed ? "brightness(0.96)" : actionButtonHovered ? "brightness(1.03)" : "brightness(1)",
           boxShadow: actionButtonPressed
-            ? "0 2px 5px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.2)"
+            ? "0 3px 10px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.22)"
             : actionButtonHovered
-            ? "0 8px 18px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.28)"
-            : "0 5px 12px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.24)",
+            ? "0 14px 34px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.30)"
+            : "0 10px 26px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.24)",
           transition:
-            "transform 120ms ease, box-shadow 120ms ease, filter 120ms ease, background 140ms ease"
+            "transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, filter 180ms ease"
         }}
       >
-        {gameOver ? "STATS" : running ? "STOP" : "DROP"}
+        {gameOver ? "STATS" : running ? "STOP" : isStopping ? "STOP" : "DROP"}
       </button>
 
       {gameOver && showStats && typeof document !== "undefined" && createPortal(
