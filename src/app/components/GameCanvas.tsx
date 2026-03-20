@@ -1585,11 +1585,12 @@ const revealStyle = gameFinished
           aria-hidden="true"
           style={{
             position: "absolute",
-            inset: "-14px -14px -18px -14px",
+            inset: "-10px -10px -14px -10px",
             borderRadius: "18px",
             background: darkMode
-              ? "radial-gradient(circle at center, rgba(0,0,0,0) 52%, rgba(0,0,0,0.22) 100%)"
-              : "radial-gradient(circle at center, rgba(0,0,0,0) 52%, rgba(0,0,0,0.07) 100%)",
+              ? "radial-gradient(circle at center, rgba(0,0,0,0) 58%, rgba(0,0,0,0.14) 100%)"
+              : "radial-gradient(circle at center, rgba(0,0,0,0) 58%, rgba(0,0,0,0.035) 100%)",
+            filter: "blur(10px)",
             pointerEvents: "none",
             zIndex: 0
           }}
