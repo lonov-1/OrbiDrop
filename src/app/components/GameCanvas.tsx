@@ -1342,7 +1342,7 @@ const revealStyle = gameFinished
     display:"flex",
     justifyContent:"center",
     gap: isCompact ? "6px" : "8px",
-    marginTop: isCompact ? "4px" : "8px"
+    marginTop: isCompact ? "3px" : "5px"
   }}
 >
 
@@ -1693,7 +1693,7 @@ const revealStyle = gameFinished
             display:"flex",
             alignItems:"flex-start",
             justifyContent:"center",
-            paddingTop:"22vh",
+            paddingTop: isSmallScreen ? "16vh" : "18vh",
             zIndex:10000
           }}
         >
