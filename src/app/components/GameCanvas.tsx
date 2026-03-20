@@ -177,6 +177,7 @@ export default function GameCanvas() {
   const countRafRef = useRef<number | null>(null)
   const earthDroppedRef = useRef(false)
   const earthWonThisRunRef = useRef(false)
+  const prevGameOverRef = useRef(false)
 
   const [ballCount, setBallCount] = useState(0)
   const [running, setRunning] = useState(false)
@@ -189,6 +190,9 @@ export default function GameCanvas() {
   const [countDisplay, setCountDisplay] = useState(0)
   const [showStats, setShowStats] = useState(false)
   const [statsDismissed, setStatsDismissed] = useState(false)
+  // Auto-open stats once when the game finishes.
+  // After the user closes, the STATS button is spam-locked via statsDismissed.
+  const [statsAutoOpened, setStatsAutoOpened] = useState(false)
   const [showEarthWin, setShowEarthWin] = useState(false)
   const [stopImpact, setStopImpact] = useState(false)
   const [dropImpact, setDropImpact] = useState(false)
@@ -446,6 +450,17 @@ export default function GameCanvas() {
 
   const gameOver = attempt > GAME.maxAttempts
 
+  // When a new game finishes (gameOver flips from false -> true),
+  // reset the stats-open locks so the stats can appear again.
+  useEffect(() => {
+    const next = gameOver
+    if (next && !prevGameOverRef.current) {
+      setStatsDismissed(false)
+      setStatsAutoOpened(false)
+    }
+    prevGameOverRef.current = next
+  }, [gameOver])
+
   useEffect(() => {
 
     if (!gameOver || bestDiff === null) return
@@ -470,17 +485,18 @@ export default function GameCanvas() {
   }, [gameOver, bestDiff])
 
   useEffect(() => {
-    if (!gameOver || bestDiff === null || showStats || statsDismissed) return
+    if (!gameOver || bestDiff === null || showStats || statsAutoOpened) return
 
     // Give the final result/diff/reveal a moment to finish
     // before mounting the full Statistics modal.
     const delayMs = isSmallScreen ? 850 : 750
     const t = window.setTimeout(() => {
+      setStatsAutoOpened(true)
       setShowStats(true)
     }, delayMs)
 
     return () => window.clearTimeout(t)
-  }, [gameOver, bestDiff, showStats, statsDismissed, isSmallScreen])
+  }, [gameOver, bestDiff, showStats, statsAutoOpened, isSmallScreen])
 
   useEffect(() => {
     if (!showStats) {
@@ -966,7 +982,10 @@ useEffect(() => {
       if (isCounting || isStopping) return
       e.preventDefault()
       if (gameOver) {
-        if (!statsDismissed) setShowStats(true)
+        if (!statsDismissed) {
+          setStatsAutoOpened(true)
+          setShowStats(true)
+        }
         return
       }
       if (running) stopGame()
@@ -1234,7 +1253,11 @@ const revealStyle = gameFinished
       {gameOver && (
         <button
           type="button"
-          onClick={() => setShowStats(true)}
+          onClick={() => {
+            if (statsDismissed) return
+            setStatsAutoOpened(true)
+            setShowStats(true)
+          }}
           aria-label="Show your stats"
           style={{
             width:isCompact ? "32px" : "24px",
