@@ -1876,18 +1876,18 @@ const revealStyle = gameFinished
           touchAction:"manipulation",
           willChange:"transform, box-shadow, filter",
           transform: actionButtonPressed
-            ? "translateY(1px) scale(0.975)"
+            ? "translateY(2px) scale(0.97)"
             : actionButtonHovered
             ? "translateY(-1px) scale(1.015)"
             : "scale(1)",
           filter: actionButtonPressed ? "brightness(0.96)" : actionButtonHovered ? "brightness(1.03)" : "brightness(1)",
           boxShadow: actionButtonPressed
-            ? "0 3px 10px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.22)"
+            ? "0 2px 6px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.18)"
             : actionButtonHovered
             ? "0 14px 34px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.30)"
             : "0 10px 26px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.24)",
           transition:
-            "transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, filter 180ms ease"
+            "transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 120ms ease, filter 120ms ease"
         }}
       >
         {gameOver ? "STATS" : running ? "STOP" : isStopping ? "STOP" : "DROP"}
