@@ -1547,14 +1547,15 @@ const revealStyle = gameFinished
             color: theme.feedbackText,
             opacity:
               stopImpact || dropImpact
-                ? 0.2
+                ? 0.16
                 : running && !isCounting
-                ? 0.28
-                : 0.22,
+                ? 0.14
+                : 0.18,
             textShadow: darkMode
-              ? "0 0 24px rgba(255,255,255,0.15), 0 0 12px rgba(255,255,255,0.1), 0 2px 8px rgba(0,0,0,0.5)"
-              : "0 0 24px rgba(255,255,255,0.25), 0 0 12px rgba(255,255,255,0.12), 0 2px 12px rgba(0,0,0,0.08)",
+              ? "0 0 18px rgba(255,255,255,0.12), 0 0 10px rgba(255,255,255,0.08), 0 2px 8px rgba(0,0,0,0.35)"
+              : "0 0 18px rgba(255,255,255,0.2), 0 0 10px rgba(255,255,255,0.1), 0 2px 10px rgba(0,0,0,0.06)",
             letterSpacing: "-0.02em",
+            filter: "blur(0.35px)",
             pointerEvents: "none",
             transition: "transform 200ms ease, opacity 200ms ease"
           }}
