@@ -268,7 +268,9 @@ export default function GameCanvas() {
   // Compact sizing for phones (keeps the layout balanced without scrolling).
   const isCompact = isSmallScreen
 
-  const supabaseEnabled = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL)
+  // Supabase is configured via .env.local. Even if env values aren't exposed to the client,
+  // the API routes may still work; we'll attempt Supabase syncing and gracefully fall back.
+  const supabaseEnabled = true
 
   const [soundEnabled, setSoundEnabled] = useState(() => {
     return getStorageItem("orbidropSoundEnabled") !== "false"
@@ -547,8 +549,6 @@ export default function GameCanvas() {
 
   // Sync daily attempts + all-time stats from Supabase (no login required).
   useEffect(() => {
-    if (!supabaseEnabled) return
-
     const run = async () => {
       try {
         const attemptsRes = await fetch(
@@ -594,7 +594,6 @@ export default function GameCanvas() {
   }, [gameOver])
 
   useEffect(() => {
-    if (supabaseEnabled) return
     if (!gameOver || bestDiff === null) return
 
     const diff = bestDiff
@@ -1060,20 +1059,18 @@ useEffect(() => {
     const isClose = diff > 0 && diff <= 3
     const isMedium = diff > 3 && diff <= 10
 
-    const submitAttemptPromise = supabaseEnabled
-      ? fetch("/api/daily-submit-attempt", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            date: todayKey,
-            playerId,
-            ballCount: finalCount,
-            target
-          })
-        })
-          .then(r => r.json())
-          .catch(() => null)
-      : Promise.resolve(null)
+    const submitAttemptPromise = fetch("/api/daily-submit-attempt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        date: todayKey,
+        playerId,
+        ballCount: finalCount,
+        target
+      })
+    })
+      .then(r => r.json())
+      .catch(() => null)
 
     setStopDiff(diff)
     setStopPulse(false)
