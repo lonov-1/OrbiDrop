@@ -1576,11 +1576,12 @@ const revealStyle = gameFinished
           marginTop: isCompact ? "2px" : "6px",
           borderRadius: "0 0 16px 16px",
           background: theme.glass,
+            border: `1px solid ${theme.border}`,
           overflow: "hidden",
           position: "relative",
           boxShadow: darkMode
-            ? "inset 2px 0 0 rgba(255,255,255,0.06), inset -2px 0 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.2), inset 0 -10px 14px rgba(0,0,0,0.15), 0 8px 20px rgba(0,0,0,0.25)"
-            : "inset 4px 0 0 rgba(110,110,110,0.44), inset -4px 0 0 rgba(110,110,110,0.44), inset 0 -1px 0 rgba(70,70,70,0.28), inset 0 -10px 14px rgba(0,0,0,0.05), inset 0 -26px 26px rgba(0,0,0,0.07), inset 0 0 0 1px rgba(0,0,0,0.035), 0 8px 20px rgba(0,0,0,0.055)",
+            ? "inset 2px 0 0 rgba(255,255,255,0.06), inset -2px 0 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.2), inset 0 -10px 14px rgba(0,0,0,0.15), 0 10px 26px rgba(0,0,0,0.20)"
+            : "inset 4px 0 0 rgba(110,110,110,0.40), inset -4px 0 0 rgba(110,110,110,0.40), inset 0 -1px 0 rgba(70,70,70,0.26), inset 0 -10px 14px rgba(0,0,0,0.05), inset 0 -26px 26px rgba(0,0,0,0.06), inset 0 0 0 1px rgba(0,0,0,0.03), 0 10px 26px rgba(0,0,0,0.07)",
           transform:
             stopImpact || dropImpact
               ? "translateY(-1px) scale(1.02)"
@@ -1622,6 +1623,38 @@ const revealStyle = gameFinished
                 ? "linear-gradient(to top, rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.14) 45%, rgba(0,0,0,0.00) 100%)"
                 : "linear-gradient(to top, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0.05) 45%, rgba(0,0,0,0.00) 100%)",
               filter: "blur(0.25px)",
+              pointerEvents: "none",
+              zIndex: 0
+            }}
+          />
+
+          {/* Faint left/right edge highlight to define the glass shape */}
+          <div
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: "3px",
+              background: darkMode
+                ? "linear-gradient(to bottom, rgba(255,255,255,0.10), rgba(255,255,255,0.00) 70%)"
+                : "linear-gradient(to bottom, rgba(255,255,255,0.25), rgba(255,255,255,0.00) 70%)",
+              pointerEvents: "none",
+              zIndex: 0
+            }}
+          />
+          <div
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: "3px",
+              background: darkMode
+                ? "linear-gradient(to bottom, rgba(255,255,255,0.10), rgba(255,255,255,0.00) 70%)"
+                : "linear-gradient(to bottom, rgba(255,255,255,0.25), rgba(255,255,255,0.00) 70%)",
               pointerEvents: "none",
               zIndex: 0
             }}
