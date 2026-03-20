@@ -27,11 +27,18 @@ body {
   background: var(--background) !important;
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  margin: 0;
 }
 
 body {
   min-height: 100%;
   min-height: 100dvh;
+  overflow: hidden;
 }
 
 /* Responsive game layout: 90vw max 400px, 100vh/100dvh, centered */
@@ -48,6 +55,13 @@ body {
   overflow: hidden;
   width: 100%;
   box-sizing: border-box;
+}
+
+/* Legal pages need internal scrolling because html/body are locked. */
+.orbifall-legal-main {
+  height: 100dvh;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .orbifall-game-wrap {

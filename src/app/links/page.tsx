@@ -1,6 +1,7 @@
 export default function LinksPage() {
   return (
     <main
+      className="orbifall-legal-main"
       style={{
         display: "flex",
         flexDirection: "column",

@@ -1,6 +1,7 @@
 export default function Privacy() {
   return (
     <main
+      className="orbifall-legal-main"
       style={{
         maxWidth: "700px",
         margin: "40px auto",
