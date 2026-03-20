@@ -304,7 +304,7 @@ export default function GameCanvas() {
         card: "#1f1f1f",
         cardLight: "#262626",
         cardLighter: "#2d2d2d",
-        glass: "linear-gradient(to bottom,#252525 0%, #1f1f1f 55%, #1a1a1a 100%)",
+        glass: "linear-gradient(to bottom,#2a2a2a 0%, #1f1f1f 55%, #161616 100%)",
         glassHighlight: "rgba(255,255,255,0.04)",
         border: "rgba(255,255,255,0.08)",
         modal: "#1a1a1a",
@@ -322,7 +322,7 @@ export default function GameCanvas() {
         card: "#f7f8fa",
         cardLight: "#f1f3f5",
         cardLighter: "#e9ecef",
-        glass: "linear-gradient(to bottom,#ffffff 0%, #f7f8fb 55%, #f1f3f5 100%)",
+        glass: "linear-gradient(to bottom,#ffffff 0%, #f7f9fc 50%, #f0f3f8 100%)",
         glassHighlight: "rgba(255,255,255,0.06)",
         border: "rgba(0,0,0,0.06)",
         modal: "#ffffff",
@@ -1591,6 +1591,40 @@ const revealStyle = gameFinished
             "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 220ms ease"
         }}
       >
+
+          {/* Very light top-edge highlight */}
+          <div
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: 0,
+              height: "18px",
+              background: darkMode
+                ? "linear-gradient(to bottom, rgba(255,255,255,0.09), rgba(255,255,255,0.00))"
+                : "linear-gradient(to bottom, rgba(255,255,255,0.14), rgba(255,255,255,0.00))",
+              pointerEvents: "none",
+              zIndex: 0
+            }}
+          />
+
+          {/* Subtle inner shadow at the bottom */}
+          <div
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: "34px",
+              background: darkMode
+                ? "linear-gradient(to top, rgba(0,0,0,0.22), rgba(0,0,0,0.00))"
+                : "linear-gradient(to top, rgba(0,0,0,0.08), rgba(0,0,0,0.00))",
+              pointerEvents: "none",
+              zIndex: 0
+            }}
+          />
 
         {isCounting && (
           <div
