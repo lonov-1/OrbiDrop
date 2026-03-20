@@ -194,7 +194,8 @@ export default function GameCanvas() {
   const [statsPopUpReady, setStatsPopUpReady] = useState(false)
   const [rulesPopUpReady, setRulesPopUpReady] = useState(false)
   const [isSmallScreen, setIsSmallScreen] = useState(false)
-  const isCompact = false
+  // Compact sizing for phones (keeps the layout balanced without scrolling).
+  const isCompact = isSmallScreen
 
   const [soundEnabled, setSoundEnabled] = useState(() => {
     return getStorageItem("orbidropSoundEnabled") !== "false"
@@ -659,7 +660,7 @@ useEffect(() => {
 
     if (!engineRef.current) return
 
-    const radius = Math.random() * 6 + 8
+    const radius = isSmallScreen ? Math.random() * 5 + 7 : Math.random() * 6 + 8
 
     const baseColor = BALL_COLORS[Math.floor(Math.random() * BALL_COLORS.length)]
     const brightnessDelta = Math.floor(Math.random() * 24) - 10
@@ -1546,10 +1547,10 @@ const revealStyle = gameFinished
             fontWeight: "800",
             color: theme.feedbackText,
             opacity:
-              stopImpact || dropImpact
+              running && !isCounting
+                ? 0.12
+                : stopImpact || dropImpact
                 ? 0.16
-                : running && !isCounting
-                ? 0.14
                 : 0.18,
             textShadow: darkMode
               ? "0 0 18px rgba(255,255,255,0.12), 0 0 10px rgba(255,255,255,0.08), 0 2px 8px rgba(0,0,0,0.35)"
