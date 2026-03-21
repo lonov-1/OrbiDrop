@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server"
-import { createHash } from "crypto"
+import { randomInt } from "crypto"
 import { tryGetSupabaseAdmin } from "@/lib/supabaseServer"
+
+function isUniqueViolation(err: { code?: string; message?: string }) {
+  if (err.code === "23505") return true
+  const m = (err.message ?? "").toLowerCase()
+  return m.includes("duplicate") || m.includes("unique")
+}
 
 export async function GET(req: Request) {
   try {
@@ -59,26 +65,42 @@ export async function GET(req: Request) {
       )
     }
 
-    let winnerPlayerId = playerId
-    if (players && players.length > 0) {
-      let bestHash: string | null = null
-      for (const p of players) {
-        if (!p.player_id) continue
-        const h = createHash("sha256").update(`${day}::${p.player_id}`).digest("hex")
-        if (bestHash === null || h < bestHash) {
-          bestHash = h
-          winnerPlayerId = p.player_id
+    const pool = (players ?? [])
+      .map(p => p.player_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+
+    const winnerPlayerId =
+      pool.length === 0 ? playerId : pool[randomInt(0, pool.length)]!
+
+    // Insert only: first successful insert wins the day (avoids upsert overwriting a concurrent pick).
+    const { error: insertErr } = await supabase.from("earth_winners").insert({
+      day,
+      winner_player_id: winnerPlayerId
+    })
+
+    if (insertErr) {
+      if (isUniqueViolation(insertErr)) {
+        const { data: raced, error: raceErr } = await supabase
+          .from("earth_winners")
+          .select("winner_player_id")
+          .eq("day", day)
+          .maybeSingle()
+
+        if (raceErr) {
+          return NextResponse.json(
+            { error: raceErr.message, code: raceErr.code },
+            { status: 500 }
+          )
+        }
+        if (raced?.winner_player_id) {
+          return NextResponse.json({
+            isWinner: raced.winner_player_id === playerId
+          })
         }
       }
-    }
 
-    const { error: upsertErr } = await supabase
-      .from("earth_winners")
-      .upsert({ day, winner_player_id: winnerPlayerId }, { onConflict: "day" })
-
-    if (upsertErr) {
       return NextResponse.json(
-        { error: upsertErr.message, code: upsertErr.code },
+        { error: insertErr.message, code: insertErr.code },
         { status: 500 }
       )
     }
