@@ -61,7 +61,6 @@ const EARTH_TEXTURE_DATA_URI =
   )
 
 const EARTH_DROP_KEY_PREFIX = "orbifallEarthDrop:"
-const PLAYER_ID_KEY = "orbifallPlayerId"
 const BALL_TEXTURE_SIZE = 100
 
 function makeBallTextureUri(baseColor: string, brightnessDelta: number) {
@@ -208,17 +207,6 @@ function varyHexBrightness(hex: string, delta: number) {
   return `rgb(${nextR}, ${nextG}, ${nextB})`
 }
 
-function getOrCreatePlayerId() {
-  const existing = getStorageItem(PLAYER_ID_KEY)
-  if (existing) return existing
-  const id =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`
-  setStorageItem(PLAYER_ID_KEY, id)
-  return id
-}
-
 export default function GameCanvas() {
 
   const sceneRef = useRef<HTMLDivElement>(null)
@@ -251,6 +239,8 @@ export default function GameCanvas() {
   const [countDisplay, setCountDisplay] = useState(0)
   const [showStats, setShowStats] = useState(false)
   const [statsDismissed, setStatsDismissed] = useState(false)
+  /** True only after finishing the 3rd try this session — hides glass countdown until stats are dismissed. Reload clears this so hydrated "game over" still shows the countdown. */
+  const [glassCountdownBlocked, setGlassCountdownBlocked] = useState(false)
   // Auto-open stats once when the game finishes.
   // After the user closes, the STATS button is spam-locked via statsDismissed.
   const [statsAutoOpened, setStatsAutoOpened] = useState(false)
@@ -293,6 +283,7 @@ export default function GameCanvas() {
   const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const actionButtonPressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const consumeAttemptInFlightRef = useRef(false)
 
   const withAudioContext = (fn: (ctx: AudioContext) => void) => {
     if (typeof window === "undefined") return
@@ -509,7 +500,6 @@ export default function GameCanvas() {
     }
   }
 
-  const [playerId] = useState(() => getOrCreatePlayerId())
   const todayKey = getISODate()
   const [isEarthDropPlayerToday, setIsEarthDropPlayerToday] = useState(false)
   const earthKey = `${EARTH_DROP_KEY_PREFIX}${todayKey}`
@@ -522,14 +512,28 @@ export default function GameCanvas() {
 
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/earth-winner?date=${encodeURIComponent(todayKey)}&playerId=${encodeURIComponent(playerId)}`)
-      .then((res) => res.json())
-      .then((data) => {
+    const run = async () => {
+      try {
+        await fetch(`/api/player-stats`, { credentials: "include" })
+      } catch {
+        // ignore
+      }
+      if (cancelled) return
+      try {
+        const res = await fetch(`/api/earth-winner?date=${encodeURIComponent(todayKey)}`, {
+          credentials: "include"
+        })
+        const data = await res.json()
         if (!cancelled && data?.isWinner === true) setIsEarthDropPlayerToday(true)
-      })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [todayKey, playerId])
+      } catch {
+        // ignore
+      }
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [todayKey])
 
   const [target] = useState(getDailyTarget())
   const [dayNumber] = useState(getDayNumber())
@@ -547,40 +551,37 @@ export default function GameCanvas() {
     earthCollected: 0
   })
 
-  // Sync daily attempts + all-time stats from Supabase (no login required).
+  // All-time stats + read-only today's attempt count (hydrate reload / new tab without consuming quota).
   useEffect(() => {
     const run = async () => {
       try {
-        const attemptsRes = await fetch(
-          `/api/daily-attempts?date=${encodeURIComponent(todayKey)}&playerId=${encodeURIComponent(playerId)}`
+        const statsRes = await fetch(
+          `/api/player-stats?date=${encodeURIComponent(todayKey)}`,
+          { credentials: "include" }
         )
-        const attemptsData = await attemptsRes.json()
-
-        const attemptsUsed = Number(attemptsData?.attemptsUsed ?? 0)
-        const bestDiffForDay =
-          attemptsData?.bestDiff !== null && attemptsData?.bestDiff !== undefined
-            ? Number(attemptsData.bestDiff)
-            : null
-
-        setAttempt(Math.min(GAME.maxAttempts + 1, attemptsUsed + 1))
-        setBestDiff(bestDiffForDay)
-      } catch {
-        // If Supabase isn't reachable (dev), keep local defaults.
-      }
-
-      try {
-        const statsRes = await fetch(`/api/player-stats?playerId=${encodeURIComponent(playerId)}`)
         const statsData = await statsRes.json()
         if (statsData?.stats) setStats(statsData.stats as Stats)
+        const u = statsData?.attemptsUsedToday
+        if (typeof u === "number") {
+          if (u >= GAME.maxAttempts) {
+            setAttempt(GAME.maxAttempts + 1)
+          } else if (u > 0) {
+            setAttempt(Math.min(GAME.maxAttempts + 1, u))
+          }
+        }
       } catch {
         // ignore
       }
     }
 
     run()
-  }, [todayKey, playerId])
+  }, [todayKey])
 
   const gameOver = attempt > GAME.maxAttempts
+
+  useEffect(() => {
+    if (!gameOver) setGlassCountdownBlocked(false)
+  }, [gameOver])
 
   // When a new game finishes (gameOver flips from false -> true),
   // reset the stats-open locks so the stats can appear again.
@@ -826,7 +827,10 @@ useEffect(() => {
 
     if (!engineRef.current) return
 
-    const radius = isSmallScreen ? Math.random() * 5 + 7 : Math.random() * 6 + 8
+    // Bigger orbs → glass feels full sooner (keep max ~21 so spawn still clears walls at ±40 jitter).
+    const radius = isSmallScreen
+      ? Math.random() * 6.5 + 11.5
+      : Math.random() * 7.5 + 13.5
 
     const baseColor = BALL_COLORS[Math.floor(Math.random() * BALL_COLORS.length)]
     const brightnessDelta = Math.floor(Math.random() * 24) - 10
@@ -980,8 +984,41 @@ useEffect(() => {
 
   }
 
-  const startGame = () => {
+  const startGame = async () => {
+    if (running || gameOver || isCounting || isStopping) return
+    if (consumeAttemptInFlightRef.current) return
+    consumeAttemptInFlightRef.current = true
 
+    let okToStart = false
+    try {
+      const res = await fetch(`/api/daily-attempts?date=${encodeURIComponent(todayKey)}`, {
+        credentials: "include"
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        // Local dev often has no Supabase → API returns 503/500; still allow play (submit may fail).
+        const host = typeof window !== "undefined" ? window.location.hostname : ""
+        const isLocalDev = host === "localhost" || host === "127.0.0.1"
+        okToStart =
+          isLocalDev && (res.status === 503 || res.status === 500)
+      } else if (data?.limitReached === true) {
+        setAttempt(GAME.maxAttempts + 1)
+        okToStart = false
+      } else {
+        const used = Number(data?.attemptsUsed ?? 0)
+        if (used > 0) {
+          setAttempt(Math.min(GAME.maxAttempts + 1, used))
+        }
+        okToStart = true
+      }
+    } catch {
+      // Offline / network error: allow starting (submit may still fail server-side).
+      okToStart = true
+    } finally {
+      consumeAttemptInFlightRef.current = false
+    }
+
+    if (!okToStart) return
     if (running || gameOver || isCounting || isStopping) return
 
     // Impact moment for DROP
@@ -1062,9 +1099,9 @@ useEffect(() => {
     const submitAttemptPromise = fetch("/api/daily-submit-attempt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({
         date: todayKey,
-        playerId,
         ballCount: finalCount,
         target
       })
@@ -1149,7 +1186,10 @@ useEffect(() => {
       setGameFinished(true)
       setAttemptResults(prev => [...prev, diff])
       setBestDiff(prev => (prev === null ? diff : Math.min(prev, diff)))
-      setAttempt(prev => prev + 1)
+      setAttempt(prev => {
+        if (prev === GAME.maxAttempts) setGlassCountdownBlocked(true)
+        return prev + 1
+      })
 
       // Persist this attempt + enforce daily limit server-side.
       submitAttemptPromise?.then((data: any) => {
@@ -1163,7 +1203,7 @@ useEffect(() => {
           }
 
           if (data.isDayComplete) {
-            fetch(`/api/player-stats?playerId=${encodeURIComponent(playerId)}`)
+            fetch(`/api/player-stats`, { credentials: "include" })
               .then(r => r.json())
               .then(statsRes => {
                 if (statsRes?.stats) {
@@ -1667,281 +1707,249 @@ const revealStyle = gameFinished
        }}
      />
 
-     <div
-  style={{
-    textAlign:"center",
-    marginBottom:isCompact ? "1px" : "6px"
-  }}
->
-
-<div style={{textAlign:"center", marginBottom:isCompact ? "1px" : "6px"}}>
-
-  {/* Orbidrop + Streak + Info/Stats */}
-
-  <div
-    style={{
-      display:"flex",
-      alignItems:"center",
-      justifyContent:"space-between",
-      gap:isCompact ? "8px" : "16px",
-      fontSize:isCompact ? "14px" : "16px",
-      fontWeight:"600",
-      width:"100%",
-      maxWidth:`${playfieldWidth}px`,
-      margin:"0 auto",
-      color: theme.text
-    }}
-  >
-    <div style={{display:"flex", alignItems:"center", gap:"8px"}}>
-      {!earthCollectedToday && (
-        <span
-          ref={earthIconRef}
-          aria-hidden="true"
-          style={{
-            width:`${EARTH_DIAMETER}px`,
-            height:`${EARTH_DIAMETER}px`,
-            borderRadius:"50%",
-            display:"inline-block",
-            backgroundImage:`url("${EARTH_TEXTURE_DATA_URI}")`,
-            backgroundSize:"cover",
-            boxShadow:"0 2px 6px rgba(0,0,0,0.22), inset -2px -3px 4px rgba(0,0,0,0.28)",
-            border:"1px solid rgba(255,255,255,0.55)"
-          }}
-        />
-      )}
-      <span style={{ color: theme.text }}>Orbidrop #{dayNumber}</span>
-    </div>
-      <div style={{display:"flex", alignItems:"center", gap:"8px"}}>
-      <div style={{fontSize:"14px", color: theme.muted}}>
-        🔥 {stats.streak}
-      </div>
-      {gameOver && (
-        <button
-          type="button"
-          onClick={() => {
-            setStatsDismissed(false)
-            setStatsAutoOpened(true)
-            setShowStats(true)
-          }}
-          aria-label="Show your stats"
-          style={{
-            width:isCompact ? "32px" : "24px",
-            height:isCompact ? "32px" : "24px",
-            borderRadius:"999px",
-            border:"none",
-            background: theme.cardLight,
-            display:"flex",
-            alignItems:"center",
-            justifyContent:"center",
-            fontSize:isCompact ? "16px" : "13px",
-            cursor:"pointer",
-            color: theme.muted,
-            boxShadow: darkMode ? "0 1px 2px rgba(0,0,0,0.3)" : "0 1px 2px rgba(0,0,0,0.12)"
-          }}
-        >
-          📊
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={() => setShowRules(true)}
-        aria-label="Show how to play"
-        style={{
-          width:isCompact ? "32px" : "24px",
-          height:isCompact ? "32px" : "24px",
-          borderRadius:"999px",
-          border:"none",
-          background: theme.cardLighter,
-          display:"flex",
-          alignItems:"center",
-          justifyContent:"center",
-          fontSize:isCompact ? "16px" : "13px",
-          cursor:"pointer",
-          color: theme.muted,
-          boxShadow: darkMode ? "0 1px 2px rgba(0,0,0,0.3)" : "0 1px 2px rgba(0,0,0,0.12)"
-        }}
+      {/* Unified top control panel — dense column, capped width (centered) */}
+      <div
+        className={
+          "mx-auto mb-1 flex w-full max-w-md flex-col gap-1.5 rounded-2xl border p-2 sm:mb-1.5 sm:gap-2 sm:p-2.5 " +
+          (darkMode
+            ? "border-white/[0.07] bg-[rgba(34,34,36,0.94)] shadow-[0_4px_20px_rgba(0,0,0,0.26),inset_0_1px_0_rgba(255,255,255,0.05)]"
+            : "border-black/[0.055] bg-white/[0.96] shadow-[0_4px_18px_rgba(0,0,0,0.06),inset_0_1px_0_rgba(255,255,255,0.88)]")
+        }
       >
-        i
-      </button>
-    </div>
-  </div>
-
-  {/* Next challenge countdown (subtle urgency) */}
-  <div
-    style={{
-      marginTop: isCompact ? "0px" : "0px",
-      fontSize: isCompact ? "12px" : "13px",
-      color: theme.muted,
-      opacity: 0.92,
-      fontWeight: 700,
-      letterSpacing: "-0.01em",
-      padding: isCompact ? "2px 8px" : "3px 10px",
-      borderRadius: "999px",
-      background: darkMode
-        ? "linear-gradient(to bottom, rgba(255,255,255,0.05), rgba(255,255,255,0.02))"
-        : "linear-gradient(to bottom, rgba(0,0,0,0.03), rgba(0,0,0,0.015))",
-      border: darkMode ? "1px solid rgba(255,255,255,0.06)" : "1px solid rgba(0,0,0,0.05)",
-      boxShadow: darkMode ? "0 1px 2px rgba(0,0,0,0.28)" : "0 1px 2px rgba(0,0,0,0.06)",
-      textAlign: "center"
-    }}
-  >
-    New challenge in {timeLeft}
-  </div>
-
-  {/* Target */}
-
-  <div
-    style={{
-      marginTop: isCompact ? "0px" : "2px",
-      display: "inline-block",
-      padding: isCompact ? "3px 8px" : "4px 10px",
-      borderRadius: "8px",
-      background:
-        stopPulse && stopDiff !== null && stopDiff <= 5
-          ? stopIsClose
-            ? darkMode
-              ? `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.18)} 0%, ${hexToRgba(
-                  stopPulseColor,
-                  0.07
-                )} 70%)`
-              : `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.12)} 0%, ${hexToRgba(
-                  stopPulseColor,
-                  0.05
-                )} 70%)`
-            : // Reward band (diff 4-5): lighter, more subtle tint
-              darkMode
-            ? `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.13)} 0%, ${hexToRgba(
-                stopPulseColor,
-                0.05
-              )} 70%)`
-            : `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.09)} 0%, ${hexToRgba(
-                stopPulseColor,
-                0.035
-              )} 70%)`
-          : theme.cardLight,
-      boxShadow:
-        stopPulse && stopDiff !== null && stopDiff <= 5
-          ? stopIsPerfect
-            ? `0 0 0 3px ${hexToRgba(stopPulseColor, 0.16)}, 0 10px 26px rgba(0,0,0,0.04)`
-            : stopIsClose
-            ? `0 0 0 2px ${hexToRgba(stopPulseColor, 0.12)}, 0 10px 26px rgba(0,0,0,0.04)`
-            : `0 0 0 2px ${hexToRgba(stopPulseColor, 0.10)}, 0 10px 26px rgba(0,0,0,0.03)`
-          : darkMode
-            ? "0 1px 3px rgba(0,0,0,0.2)"
-            : "0 1px 3px rgba(0,0,0,0.06)",
-      fontWeight: "500",
-      fontSize: "13px",
-      color: theme.muted,
-      opacity: 0.9
-    }}
-  >
-    🎯 Target {target}
-  </div>
-
-  {/* Attempts */}
-
-  <div style={{marginTop:isCompact ? "0px" : "6px"}}>
-
-    <div style={{fontSize:isCompact ? "11px" : "12px", color: theme.muted, marginBottom:isCompact ? "1px" : "3px"}}>
-      Attempts
-    </div>
-
-    <div
-      style={{
-        display:"flex",
-        justifyContent:"center",
-        gap:"8px"
-      }}
-    >
-
-      {[1,2,3].map(i => (
-
+        {/* Header: title + streak/actions on one row */}
         <div
-          key={i}
-          style={{
-            width:"22px",
-            height:"22px",
-            borderRadius:"50%",
-            display:"flex",
-            alignItems:"center",
-            justifyContent:"center",
-            fontSize:"11px",
-            background:
-              attempt > i
-                ? "#2a9d8f"
-                : theme.cardLighter,
-            color:
-              attempt > i
-                ? "white"
-                : theme.muted2
-          }}
+          className="flex min-h-[24px] items-center justify-between gap-1.5 text-[13px] font-semibold leading-none sm:min-h-[26px] sm:gap-2 sm:text-sm"
+          style={{ color: theme.text }}
         >
-          {i}
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
+            {!earthCollectedToday && (
+              <span
+                ref={earthIconRef}
+                aria-hidden="true"
+                style={{
+                  width: `${EARTH_DIAMETER}px`,
+                  height: `${EARTH_DIAMETER}px`,
+                  borderRadius: "50%",
+                  display: "inline-block",
+                  flexShrink: 0,
+                  backgroundImage: `url("${EARTH_TEXTURE_DATA_URI}")`,
+                  backgroundSize: "cover",
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.22), inset -2px -3px 4px rgba(0,0,0,0.28)",
+                  border: "1px solid rgba(255,255,255,0.55)"
+                }}
+              />
+            )}
+            <span className="truncate tracking-tight" style={{ color: theme.text }}>
+              Orbidrop #{dayNumber}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+            <div className="text-[13px] font-semibold sm:text-sm" style={{ color: theme.muted }}>
+              🔥 {stats.streak}
+            </div>
+            {gameOver && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStatsDismissed(false)
+                  setStatsAutoOpened(true)
+                  setShowStats(true)
+                }}
+                aria-label="Show your stats"
+                style={{
+                  width: isCompact ? "32px" : "28px",
+                  height: isCompact ? "32px" : "28px",
+                  borderRadius: "999px",
+                  border: "none",
+                  background: darkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: isCompact ? "15px" : "14px",
+                  cursor: "pointer",
+                  color: theme.muted,
+                  boxShadow: "none"
+                }}
+              >
+                📊
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowRules(true)}
+              aria-label="Show how to play"
+              style={{
+                width: isCompact ? "32px" : "28px",
+                height: isCompact ? "32px" : "28px",
+                borderRadius: "999px",
+                border: "none",
+                background: darkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: isCompact ? "14px" : "13px",
+                fontWeight: 700,
+                cursor: "pointer",
+                color: theme.muted,
+                boxShadow: "none"
+              }}
+            >
+              i
+            </button>
+          </div>
         </div>
 
-      ))}
+        {/* Target (primary) + Rounds (secondary) — full-width pill, tight vertical rhythm */}
+        <div
+          className={
+            "w-full rounded-xl border px-1.5 py-1.5 sm:px-2 sm:py-1.5 " +
+            (darkMode
+              ? "border-white/10 bg-black/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+              : "border-black/[0.06] bg-black/[0.025] shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]")
+          }
+        >
+          <div className="flex w-full flex-col items-center gap-0.5">
+            {/* Primary: target — spans inner width */}
+            <div
+              className={
+                (running && !isCounting && !gameOver ? "orbifall-target--live " : "") +
+                "flex w-full items-center justify-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap rounded-full border px-5 py-2 font-extrabold leading-none tracking-tight sm:px-6 sm:py-2.5 " +
+                (isCompact ? "text-base sm:text-[17px]" : "text-[17px] sm:text-lg") +
+                " " +
+                (darkMode
+                  ? "border-white/[0.11] text-neutral-100"
+                  : "border-black/[0.07] text-neutral-900")
+              }
+              style={{
+                background:
+                  stopPulse && stopDiff !== null && stopDiff <= 5
+                    ? stopIsClose
+                      ? darkMode
+                        ? `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.2)} 0%, ${hexToRgba(
+                            stopPulseColor,
+                            0.08
+                          )} 70%)`
+                        : `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.14)} 0%, ${hexToRgba(
+                            stopPulseColor,
+                            0.06
+                          )} 70%)`
+                      : darkMode
+                      ? `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.14)} 0%, ${hexToRgba(
+                          stopPulseColor,
+                          0.06
+                        )} 70%)`
+                      : `linear-gradient(to bottom, ${hexToRgba(stopPulseColor, 0.1)} 0%, ${hexToRgba(
+                          stopPulseColor,
+                          0.04
+                        )} 70%)`
+                    : darkMode
+                    ? "linear-gradient(to bottom, rgba(255,255,255,0.1), rgba(255,255,255,0.04))"
+                    : "linear-gradient(to bottom, rgba(255,255,255,0.96), rgba(247,248,250,0.92))",
+                boxShadow:
+                  stopPulse && stopDiff !== null && stopDiff <= 5
+                    ? stopIsPerfect
+                      ? `0 0 0 2px ${hexToRgba(stopPulseColor, 0.18)}, 0 3px 12px rgba(0,0,0,0.07)`
+                      : stopIsClose
+                      ? `0 0 0 2px ${hexToRgba(stopPulseColor, 0.14)}, 0 3px 10px rgba(0,0,0,0.06)`
+                      : `0 0 0 2px ${hexToRgba(stopPulseColor, 0.11)}, 0 2px 8px rgba(0,0,0,0.05)`
+                    : darkMode
+                    ? "0 2px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06)"
+                    : "0 2px 10px rgba(0,0,0,0.07), inset 0 1px 0 rgba(255,255,255,0.9)",
+                transition: "box-shadow 220ms ease, border-color 220ms ease, background 220ms ease"
+              }}
+            >
+              <span aria-hidden className="shrink-0 text-[0.95em] leading-none opacity-90">
+                🎯
+              </span>
+              <span
+                className={
+                  "shrink-0 text-[0.72em] font-semibold leading-none " +
+                  (darkMode ? "text-neutral-400" : "text-neutral-500")
+                }
+              >
+                Target
+              </span>
+              <span className="tabular-nums">{target}</span>
+            </div>
 
-    </div>
+            {/* Secondary: rounds — minimal gap under target */}
+            <div className="flex w-full flex-col items-center gap-0 pt-0">
+              <span
+                className={
+                  "text-[7px] font-semibold uppercase leading-none tracking-[0.14em] sm:text-[8px] " +
+                  (darkMode ? "text-neutral-500" : "text-neutral-400")
+                }
+              >
+                Rounds
+              </span>
+              <div className="flex items-center justify-center gap-0.5 sm:gap-1">
+                {[1, 2, 3].map(i => {
+                  const done = attempt > i
+                  const active = i === attempt && attempt <= GAME.maxAttempts && !gameOver
+                  const showLivePulse = active && !done && running && !isCounting
+                  return (
+                    <div
+                      key={i}
+                      className={
+                        (showLivePulse ? "orbifall-attempt--live " : "") +
+                        "flex size-[15px] shrink-0 items-center justify-center rounded-full border text-[7px] font-semibold transition-all duration-150 sm:size-4 sm:text-[8px] " +
+                        (done
+                          ? "border-transparent bg-[#2a9d8f] text-white"
+                          : active
+                          ? darkMode
+                            ? "border-teal-400/45 bg-neutral-700/90 text-neutral-100"
+                            : "border-teal-600/35 bg-neutral-100 text-neutral-800"
+                          : darkMode
+                          ? "border-white/[0.07] bg-neutral-800/60 text-neutral-500"
+                          : "border-black/[0.06] bg-neutral-100/90 text-neutral-400") +
+                        (active && !done && !showLivePulse ? " scale-105" : " scale-100")
+                      }
+                    >
+                      {i}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
 
-  </div>
-
-</div>
-
-</div>
-
-      <div
-        style={{
-          height: "auto",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          width: `${playfieldWidth}px`
-        }}
-      >
-
- <div
-  style={{
-    display:"flex",
-    justifyContent:"center",
-    gap: isCompact ? "6px" : "8px",
-    marginTop: isCompact ? "1px" : "3px"
-  }}
->
+        {/* Stats — equal thirds, tight to rounds */}
+        <div
+          className={
+            "mt-0.5 grid w-full grid-cols-3 gap-1 rounded-xl p-1 sm:gap-1.5 sm:p-1.5 " +
+            (darkMode
+              ? "border border-white/[0.06] bg-black/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]"
+              : "border border-black/[0.05] bg-black/[0.028] shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]") +
+            " transition-[border-color,box-shadow] duration-200"
+          }
+          style={{
+            borderColor: isCounting ? hexToRgba("#2a9d8f", darkMode ? 0.28 : 0.2) : undefined
+          }}
+        >
 
   {/* RESULT */}
 
   <div
+    className="min-w-0 flex min-h-[30px] flex-col items-center justify-center gap-0.5 rounded-lg px-1.5 py-1 text-center text-[11px] leading-none sm:min-h-[32px] sm:gap-1 sm:px-2 sm:py-1.5 sm:text-xs"
     style={{
       background: darkMode
-        ? "linear-gradient(to bottom, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.00) 58%)," +
+        ? "linear-gradient(to bottom, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 58%)," +
           theme.card
-        : "linear-gradient(to bottom, rgba(0,0,0,0.025) 0%, rgba(0,0,0,0.00) 58%)," +
+        : "linear-gradient(to bottom, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.35) 100%)," +
           theme.card,
-      padding: isCompact ? "4px 8px" : "6px 12px",
-      borderRadius:"10px",
-      fontSize: isCompact ? "12px" : "14px",
-      minWidth: isCompact ? "56px" : "70px",
-      minHeight: isCompact ? "34px" : "40px",
-      textAlign:"center",
-      display:"flex",
-      flexDirection:"column",
-      alignItems:"center",
-      justifyContent:"center",
-      gap: isCompact ? "1px" : "2px",
-      lineHeight:1,
       border:
         stopPulse && stopDiff !== null && stopDiff <= 5
           ? `1px solid ${hexToRgba(stopPulseColor, darkMode ? 0.38 : 0.30)}`
-          : `1px solid ${darkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.045)"}`,
+          : `1px solid ${darkMode ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)"}`,
       boxShadow:
         stopPulse && stopDiff !== null && stopDiff <= 5
           ? stopIsPerfect
-            ? `0 0 0 2px ${hexToRgba(stopPulseColor, 0.16)}, 0 10px 26px rgba(0,0,0,0.04)`
-            : `0 0 0 2px ${hexToRgba(stopPulseColor, 0.13)}, 0 10px 26px rgba(0,0,0,0.04)`
+            ? `0 0 0 2px ${hexToRgba(stopPulseColor, 0.16)}, 0 4px 12px rgba(0,0,0,0.05)`
+            : `0 0 0 2px ${hexToRgba(stopPulseColor, 0.13)}, 0 4px 12px rgba(0,0,0,0.045)`
           : darkMode
-          ? "0 2px 8px rgba(0,0,0,0.22)"
-          : "0 2px 8px rgba(0,0,0,0.05)",
+          ? "0 1px 3px rgba(0,0,0,0.32)"
+          : "0 1px 3px rgba(0,0,0,0.045)",
       transform: isCounting
         ? "translateY(-2px) scale(1.12)"
         : scoreReveal
@@ -1957,7 +1965,7 @@ const revealStyle = gameFinished
         "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
     }}
   >
-    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2, lineHeight:1}}>
+    <div className="text-[10px] leading-none sm:text-[11px]" style={{ color: theme.muted2 }}>
       Result
     </div>
     <div
@@ -1980,36 +1988,25 @@ const revealStyle = gameFinished
   {/* DIFF */}
 
   <div
+    className="min-w-0 flex min-h-[30px] flex-col items-center justify-center gap-0.5 rounded-lg px-1.5 py-1 text-center text-[11px] leading-none sm:min-h-[32px] sm:gap-1 sm:px-2 sm:py-1.5 sm:text-xs"
     style={{
       background: darkMode
-        ? "linear-gradient(to bottom, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.00) 58%)," +
+        ? "linear-gradient(to bottom, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 58%)," +
           theme.card
-        : "linear-gradient(to bottom, rgba(0,0,0,0.025) 0%, rgba(0,0,0,0.00) 58%)," +
+        : "linear-gradient(to bottom, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.35) 100%)," +
           theme.card,
-      padding: isCompact ? "4px 8px" : "6px 12px",
-      borderRadius:"10px",
-      fontSize: isCompact ? "12px" : "14px",
-      minWidth: isCompact ? "56px" : "70px",
-      minHeight: isCompact ? "34px" : "40px",
-      textAlign:"center",
-      display:"flex",
-      flexDirection:"column",
-      alignItems:"center",
-      justifyContent:"center",
-      gap: isCompact ? "1px" : "2px",
-      lineHeight:1,
       border:
         stopPulse && stopDiff !== null && stopDiff <= 5
           ? `1px solid ${hexToRgba(stopPulseColor, darkMode ? 0.38 : 0.30)}`
-          : `1px solid ${darkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.045)"}`,
+          : `1px solid ${darkMode ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)"}`,
       boxShadow:
         stopPulse && stopDiff !== null && stopDiff <= 5
           ? stopIsPerfect
-            ? `0 0 0 2px ${hexToRgba(stopPulseColor, 0.16)}, 0 10px 26px rgba(0,0,0,0.04)`
-            : `0 0 0 2px ${hexToRgba(stopPulseColor, 0.13)}, 0 10px 26px rgba(0,0,0,0.04)`
+            ? `0 0 0 2px ${hexToRgba(stopPulseColor, 0.16)}, 0 4px 12px rgba(0,0,0,0.05)`
+            : `0 0 0 2px ${hexToRgba(stopPulseColor, 0.13)}, 0 4px 12px rgba(0,0,0,0.045)`
           : darkMode
-          ? "0 2px 8px rgba(0,0,0,0.22)"
-          : "0 2px 8px rgba(0,0,0,0.05)",
+          ? "0 1px 3px rgba(0,0,0,0.32)"
+          : "0 1px 3px rgba(0,0,0,0.045)",
       transform: isCounting
         ? "translateY(-2px) scale(1.12)"
         : scoreReveal
@@ -2025,7 +2022,7 @@ const revealStyle = gameFinished
         "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
     }}
   >
-    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2, lineHeight:1}}>
+    <div className="text-[10px] leading-none sm:text-[11px]" style={{ color: theme.muted2 }}>
       Diff
     </div>
     <div
@@ -2048,31 +2045,20 @@ const revealStyle = gameFinished
   {/* BEST */}
 
   <div
+    className="min-w-0 flex min-h-[30px] flex-col items-center justify-center gap-0.5 rounded-lg px-1.5 py-1 text-center text-[11px] leading-none sm:min-h-[32px] sm:gap-1 sm:px-2 sm:py-1.5 sm:text-xs"
     style={{
       background: darkMode
-        ? "linear-gradient(to bottom, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.00) 58%)," +
+        ? "linear-gradient(to bottom, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 58%)," +
           theme.card
-        : "linear-gradient(to bottom, rgba(0,0,0,0.025) 0%, rgba(0,0,0,0.00) 58%)," +
+        : "linear-gradient(to bottom, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.35) 100%)," +
           theme.card,
-      padding: isCompact ? "4px 8px" : "6px 12px",
-      borderRadius:"10px",
-      fontSize: isCompact ? "12px" : "14px",
-      minWidth: isCompact ? "56px" : "70px",
-      minHeight: isCompact ? "34px" : "40px",
-      textAlign:"center",
-      display:"flex",
-      flexDirection:"column",
-      alignItems:"center",
-      justifyContent:"center",
-      gap: isCompact ? "1px" : "2px",
-      lineHeight:1,
-      border:`1px solid ${darkMode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.045)"}`,
-      boxShadow: darkMode ? "0 2px 8px rgba(0,0,0,0.22)" : "0 2px 8px rgba(0,0,0,0.05)",
+      border:`1px solid ${darkMode ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)"}`,
+      boxShadow: darkMode ? "0 1px 3px rgba(0,0,0,0.32)" : "0 1px 3px rgba(0,0,0,0.045)",
       transition:
         "background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease"
     }}
   >
-    <div style={{fontSize: isCompact ? "10px" : "11px", color: theme.muted2, lineHeight:1}}>
+    <div className="text-[10px] leading-none sm:text-[11px]" style={{ color: theme.muted2 }}>
       Best
     </div>
     <div
@@ -2089,7 +2075,11 @@ const revealStyle = gameFinished
     </div>
   </div>
 
-</div>
+        </div>
+        {/* end stats strip */}
+
+      </div>
+      {/* end top control panel */}
 
         <hr
           style={{
@@ -2102,8 +2092,6 @@ const revealStyle = gameFinished
               : "linear-gradient(to right, rgba(0,0,0,0), rgba(0,0,0,0.06), rgba(0,0,0,0))"
           }}
         />
-
-      </div>
 
       <div
         style={{
@@ -2257,19 +2245,28 @@ const revealStyle = gameFinished
         )}
 
         <div
+          className={
+            "pointer-events-none text-center antialiased " +
+            (isCompact
+              ? "max-w-[min(92%,280px)] text-[0.9375rem] sm:text-[1rem]"
+              : "max-w-[min(92%,300px)] text-[1rem] sm:text-[1.0625rem]")
+          }
           style={{
             position: "absolute",
             top: "12%",
             left: "50%",
             transform: "translate(-50%, -50%)",
-            fontSize: "16px",
-            fontWeight: 850,
-            color: theme.feedbackText,
-            letterSpacing: "-0.01em",
-            lineHeight: 1.05,
-            textShadow: darkMode ? "0 1px 8px rgba(0,0,0,0.4)" : "0 1px 8px rgba(0,0,0,0.06)",
+            fontFamily:
+              'var(--font-geist-sans, ui-sans-serif), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            fontWeight: 500,
+            letterSpacing: "-0.02em",
+            lineHeight: 1.2,
+            color: darkMode ? "rgba(228, 228, 231, 0.42)" : "rgba(64, 64, 67, 0.45)",
+            textShadow: darkMode
+              ? "0 1px 2px rgba(0,0,0,0.35)"
+              : "0 1px 0 rgba(255,255,255,0.65)",
             zIndex: 2,
-            opacity: showFeedback ? 1 : 0,
+            opacity: showFeedback ? 0.92 : 0,
             transition: showFeedback
               ? "opacity 700ms ease"
               : "opacity 120ms ease"
@@ -2342,6 +2339,32 @@ const revealStyle = gameFinished
             height: "100%"
           }}
         />
+
+        {/* After last try: countdown only after user dismisses the end-of-game stats modal */}
+        {gameOver && !showStats && statsDismissed && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="pointer-events-none absolute left-1/2 z-[4] max-w-[min(92%,280px)] -translate-x-1/2 px-3 py-1 text-center text-[10px] font-medium leading-snug tracking-wide sm:text-[11px]"
+            style={{
+              top: "8%",
+              color: theme.muted2,
+              borderRadius: "999px",
+              background: darkMode ? "rgba(0,0,0,0.32)" : "rgba(255,255,255,0.62)",
+              border: darkMode
+                ? "1px solid rgba(255,255,255,0.09)"
+                : "1px solid rgba(0,0,0,0.07)",
+              boxShadow: darkMode
+                ? "0 2px 12px rgba(0,0,0,0.25)"
+                : "0 2px 10px rgba(0,0,0,0.07)"
+            }}
+          >
+            New challenge in{" "}
+            <span className="font-semibold tabular-nums" style={{ color: theme.muted }}>
+              {timeLeft || "–"}
+            </span>
+          </div>
+        )}
 
         <div
           aria-hidden="true"
@@ -2451,6 +2474,7 @@ const revealStyle = gameFinished
             if (e.target !== e.currentTarget) return
             setShowStats(false)
             setStatsDismissed(true)
+            setGlassCountdownBlocked(false)
           }}
         >
 
@@ -2475,6 +2499,7 @@ const revealStyle = gameFinished
               onClick={() => {
                 setShowStats(false)
                 setStatsDismissed(true)
+                setGlassCountdownBlocked(false)
               }}
               aria-label="Close stats"
               style={{

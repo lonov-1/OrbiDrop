@@ -1,22 +1,30 @@
 import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
 import { tryGetSupabaseAdmin } from "@/lib/supabaseServer"
+import { ORBIFALL_PLAYER_COOKIE } from "@/lib/orbifallPlayerCookie"
+
+export const dynamic = "force-dynamic"
 
 type Body = {
   date: string // YYYY-MM-DD
-  playerId: string
   ballCount: number
   target: number
 }
 
 export async function POST(req: Request) {
   try {
+    const cookieStore = await cookies()
+    const playerId = cookieStore.get(ORBIFALL_PLAYER_COOKIE)?.value?.trim()
+    if (!playerId) {
+      return NextResponse.json({ ok: false, error: "Missing session" }, { status: 401 })
+    }
+
     const body = (await req.json()) as Partial<Body>
     const day = body.date
-    const playerId = body.playerId
     const ballCount = body.ballCount
     const target = body.target
 
-    if (!day || !playerId || typeof ballCount !== "number" || typeof target !== "number") {
+    if (!day || typeof ballCount !== "number" || typeof target !== "number") {
       return NextResponse.json({ error: "Missing or invalid fields" }, { status: 400 })
     }
 
@@ -50,20 +58,49 @@ export async function POST(req: Request) {
       )
     }
 
-    const attemptsUsed = attemptsCount ?? 0
+    const rowsUsed = attemptsCount ?? 0
     const maxAttempts = 3
 
-    if (attemptsUsed >= maxAttempts) {
+    if (rowsUsed >= maxAttempts) {
       return NextResponse.json(
         {
           ok: false,
           reason: "limit_reached",
-          attemptsUsed
+          attemptsUsed: rowsUsed
         },
         { status: 403 }
       )
     }
 
+    const { data: quotaRow, error: quotaErr } = await supabase
+      .from("player_daily_quota")
+      .select("attempts_used")
+      .eq("player_id", playerId)
+      .eq("day", day)
+      .maybeSingle()
+
+    if (quotaErr) {
+      return NextResponse.json(
+        { ok: false, error: quotaErr.message, code: quotaErr.code },
+        { status: 500 }
+      )
+    }
+
+    const quotaUsed = quotaRow?.attempts_used ?? 0
+    // Must have reserved an attempt via GET /api/daily-attempts (no peek) before STOP.
+    if (quotaUsed <= rowsUsed) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "reserved_attempt_required",
+          attemptsUsed: rowsUsed,
+          quotaUsed
+        },
+        { status: 403 }
+      )
+    }
+
+    const attemptsUsed = rowsUsed
     const diff = Math.abs(ballCount - target)
     const attemptIndex = attemptsUsed + 1
 

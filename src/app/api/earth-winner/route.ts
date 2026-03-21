@@ -1,6 +1,13 @@
-import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
 import { randomInt } from "crypto"
 import { tryGetSupabaseAdmin } from "@/lib/supabaseServer"
+import {
+  ORBIFALL_PLAYER_COOKIE,
+  getOrMintOrbifallPlayerId,
+  jsonWithOrbifallCookie
+} from "@/lib/orbifallPlayerCookie"
+
+export const dynamic = "force-dynamic"
 
 function isUniqueViolation(err: { code?: string; message?: string }) {
   if (err.code === "23505") return true
@@ -9,18 +16,22 @@ function isUniqueViolation(err: { code?: string; message?: string }) {
 }
 
 export async function GET(req: Request) {
+  const cookieStore = await cookies()
+  const { playerId, isNew } = getOrMintOrbifallPlayerId(cookieStore.get(ORBIFALL_PLAYER_COOKIE)?.value)
+
+  const j = (body: unknown, init?: ResponseInit) => jsonWithOrbifallCookie(body, init, playerId, isNew)
+
   try {
     const url = new URL(req.url)
-    const day = url.searchParams.get("date") // YYYY-MM-DD
-    const playerId = url.searchParams.get("playerId")
+    const day = url.searchParams.get("date")
 
-    if (!day || !playerId) {
-      return NextResponse.json({ error: "Missing date or playerId" }, { status: 400 })
+    if (!day) {
+      return j({ error: "Missing date" }, { status: 400 })
     }
 
     const admin = tryGetSupabaseAdmin()
     if (!admin.ok) {
-      return NextResponse.json({ error: admin.message }, { status: 503 })
+      return j({ error: admin.message }, { status: 503 })
     }
     const supabase = admin.supabase
 
@@ -29,10 +40,7 @@ export async function GET(req: Request) {
       .upsert({ player_id: playerId }, { onConflict: "player_id" })
 
     if (profileErr) {
-      return NextResponse.json(
-        { error: profileErr.message, code: profileErr.code },
-        { status: 500 }
-      )
+      return j({ error: profileErr.message, code: profileErr.code }, { status: 500 })
     }
 
     const { data: existing, error: existingErr } = await supabase
@@ -42,14 +50,11 @@ export async function GET(req: Request) {
       .maybeSingle()
 
     if (existingErr) {
-      return NextResponse.json(
-        { error: existingErr.message, code: existingErr.code },
-        { status: 500 }
-      )
+      return j({ error: existingErr.message, code: existingErr.code }, { status: 500 })
     }
 
     if (existing?.winner_player_id) {
-      return NextResponse.json({
+      return j({
         isWinner: existing.winner_player_id === playerId
       })
     }
@@ -59,10 +64,7 @@ export async function GET(req: Request) {
       .select("player_id")
 
     if (playersErr) {
-      return NextResponse.json(
-        { error: playersErr.message, code: playersErr.code },
-        { status: 500 }
-      )
+      return j({ error: playersErr.message, code: playersErr.code }, { status: 500 })
     }
 
     const pool = (players ?? [])
@@ -72,7 +74,6 @@ export async function GET(req: Request) {
     const winnerPlayerId =
       pool.length === 0 ? playerId : pool[randomInt(0, pool.length)]!
 
-    // Insert only: first successful insert wins the day (avoids upsert overwriting a concurrent pick).
     const { error: insertErr } = await supabase.from("earth_winners").insert({
       day,
       winner_player_id: winnerPlayerId
@@ -87,29 +88,23 @@ export async function GET(req: Request) {
           .maybeSingle()
 
         if (raceErr) {
-          return NextResponse.json(
-            { error: raceErr.message, code: raceErr.code },
-            { status: 500 }
-          )
+          return j({ error: raceErr.message, code: raceErr.code }, { status: 500 })
         }
         if (raced?.winner_player_id) {
-          return NextResponse.json({
+          return j({
             isWinner: raced.winner_player_id === playerId
           })
         }
       }
 
-      return NextResponse.json(
-        { error: insertErr.message, code: insertErr.code },
-        { status: 500 }
-      )
+      return j({ error: insertErr.message, code: insertErr.code }, { status: 500 })
     }
 
-    return NextResponse.json({
+    return j({
       isWinner: winnerPlayerId === playerId
     })
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error"
-    return NextResponse.json({ error: message }, { status: 500 })
+    return jsonWithOrbifallCookie({ error: message }, { status: 500 }, playerId, isNew)
   }
 }

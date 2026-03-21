@@ -1,64 +1,119 @@
 import { NextResponse } from "next/server"
-import { tryGetSupabaseAdmin } from "@/lib/supabaseServer"
+import { cookies } from "next/headers"
+import { createClient } from "@supabase/supabase-js"
+import {
+  ORBIFALL_PLAYER_COOKIE,
+  applyOrbifallPlayerCookie,
+  getOrMintOrbifallPlayerId
+} from "@/lib/orbifallPlayerCookie"
+
+export const dynamic = "force-dynamic"
+
+/**
+ * Aggregate counter: (player_id, day, attempts_used).
+ * Deployed table name is `player_daily_quota` (same columns as spec).
+ */
+const DAILY_COUNTER_TABLE = "player_daily_quota"
+const MAX_ATTEMPTS = 3
+const CONCURRENCY_RETRIES = 12
 
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url)
-    const day = url.searchParams.get("date") // YYYY-MM-DD
-    const playerId = url.searchParams.get("playerId")
-
-    if (!day || !playerId) {
-      return NextResponse.json({ error: "Missing date or playerId" }, { status: 400 })
+    const day = url.searchParams.get("date")?.trim()
+    if (!day) {
+      return NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 400 })
     }
 
-    const admin = tryGetSupabaseAdmin()
-    if (!admin.ok) {
-      return NextResponse.json(
-        {
-          error: admin.message,
-          hint: "Set env on Vercel: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY"
-        },
-        { status: 503 }
-      )
-    }
-    const supabase = admin.supabase
+    const cookieStore = await cookies()
+    const { playerId, isNew } = getOrMintOrbifallPlayerId(cookieStore.get(ORBIFALL_PLAYER_COOKIE)?.value)
 
-    const { count, error: countErr } = await supabase
-      .from("player_daily_attempts")
-      .select("id", { count: "exact", head: true })
-      .eq("day", day)
-      .eq("player_id", playerId)
-
-    if (countErr) {
-      return NextResponse.json(
-        { error: countErr.message, code: countErr.code, details: countErr.details },
-        { status: 500 }
-      )
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!supabaseUrl?.trim() || !serviceKey?.trim()) {
+      const res = NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 503 })
+      return applyOrbifallPlayerCookie(res, playerId, isNew)
     }
 
-    const { data: bestRows, error: bestErr } = await supabase
-      .from("player_daily_attempts")
-      .select("diff")
-      .eq("day", day)
-      .eq("player_id", playerId)
-
-    if (bestErr) {
-      return NextResponse.json(
-        { error: bestErr.message, code: bestErr.code, details: bestErr.details },
-        { status: 500 }
-      )
-    }
-
-    const bestDiff =
-      bestRows && bestRows.length > 0 ? Math.min(...bestRows.map(r => r.diff)) : null
-
-    return NextResponse.json({
-      attemptsUsed: count ?? 0,
-      maxAttempts: 3,
-      bestDiff
+    const supabase = createClient(supabaseUrl, serviceKey, {
+      auth: { persistSession: false, autoRefreshToken: false }
     })
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "Unknown error"
-    return NextResponse.json({ error: message }, { status: 500 })
+
+    for (let attempt = 0; attempt < CONCURRENCY_RETRIES; attempt++) {
+      const { data: row, error: selErr } = await supabase
+        .from(DAILY_COUNTER_TABLE)
+        .select("attempts_used")
+        .eq("player_id", playerId)
+        .eq("day", day)
+        .maybeSingle()
+
+      if (selErr) {
+        const res = NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 500 })
+        return applyOrbifallPlayerCookie(res, playerId, isNew)
+      }
+
+      const used = row?.attempts_used
+
+      if (used != null && used >= MAX_ATTEMPTS) {
+        const res = NextResponse.json({
+          attemptsUsed: MAX_ATTEMPTS,
+          limitReached: true
+        })
+        return applyOrbifallPlayerCookie(res, playerId, isNew)
+      }
+
+      if (used == null) {
+        const { error: insErr } = await supabase.from(DAILY_COUNTER_TABLE).insert({
+          player_id: playerId,
+          day,
+          attempts_used: 1
+        })
+
+        if (!insErr) {
+          const res = NextResponse.json({
+            attemptsUsed: 1,
+            limitReached: false
+          })
+          return applyOrbifallPlayerCookie(res, playerId, isNew)
+        }
+
+        if (insErr.code === "23505") {
+          continue
+        }
+
+        const res = NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 500 })
+        return applyOrbifallPlayerCookie(res, playerId, isNew)
+      }
+
+      const current = used as number
+      const next = current + 1
+
+      const { data: updated, error: upErr } = await supabase
+        .from(DAILY_COUNTER_TABLE)
+        .update({ attempts_used: next })
+        .eq("player_id", playerId)
+        .eq("day", day)
+        .eq("attempts_used", current)
+        .select("attempts_used")
+        .maybeSingle()
+
+      if (upErr) {
+        const res = NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 500 })
+        return applyOrbifallPlayerCookie(res, playerId, isNew)
+      }
+
+      if (updated?.attempts_used === next) {
+        const res = NextResponse.json({
+          attemptsUsed: next,
+          limitReached: false
+        })
+        return applyOrbifallPlayerCookie(res, playerId, isNew)
+      }
+    }
+
+    const res = NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 500 })
+    return applyOrbifallPlayerCookie(res, playerId, isNew)
+  } catch {
+    return NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 500 })
   }
 }
