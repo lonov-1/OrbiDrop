@@ -996,11 +996,11 @@ useEffect(() => {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        // Local dev often has no Supabase → API returns 503/500; still allow play (submit may fail).
-        const host = typeof window !== "undefined" ? window.location.hostname : ""
-        const isLocalDev = host === "localhost" || host === "127.0.0.1"
-        okToStart =
-          isLocalDev && (res.status === 503 || res.status === 500)
+        // Quota API down / misconfigured (503 env, 500 DB, etc.): still allow DROP so orbs run;
+        // STOP/submit may fail until the API is healthy. Previously only localhost got this path,
+        // which made production look "broken" with no orbs when Supabase returned 5xx.
+        const quotaApiServerError = res.status >= 500 && res.status < 600
+        okToStart = quotaApiServerError
       } else if (data?.limitReached === true) {
         setAttempt(GAME.maxAttempts + 1)
         okToStart = false
