@@ -23,6 +23,11 @@ const GAME = {
   maxAttempts: 3
 } as const
 
+/** Web Audio peak gain multiplier — applied to all SFX (capped per layer to limit clipping). */
+const SFX_GAIN_MUL = 1.75
+
+/** Matches `ground` body in Matter (floor collision top = playfieldHeight - this). */
+const JAR_GROUND_HEIGHT = 20
 const BALL_COLORS = ["#e63946", "#457b9d", "#2a9d8f", "#f4a261", "#e9c46a"] as const
 
 const EARTH_TEXTURE_SIZE = 64
@@ -61,6 +66,7 @@ const EARTH_TEXTURE_DATA_URI =
   )
 
 const EARTH_DROP_KEY_PREFIX = "orbifallEarthDrop:"
+const ORBIFALL_HOME_SCREEN_PROMPT_KEY = "orbifallHomeScreenPromptDismissed"
 const BALL_TEXTURE_SIZE = 100
 
 function makeBallTextureUri(baseColor: string, brightnessDelta: number) {
@@ -129,6 +135,26 @@ function getDailyTarget(today = new Date()) {
   return Math.floor(random * GAME.targetRange) + GAME.minTarget
 }
 
+/** TARGET=120 → 1 (same spawn gaps as before); scales with DROP_SPEED / DROP_SPEED@120, clamped [0.5, 1.8]. */
+function dropSpawnSpeedRelForTarget(target: number) {
+  const DROP_SPEED = (target / 3.2) * (target / 120)
+  const DROP_SPEED_REF_120 = (120 / 3.2) * (120 / 120)
+  const ratio = DROP_SPEED_REF_120 > 0 ? DROP_SPEED / DROP_SPEED_REF_120 : 1
+  return Math.min(1.8, Math.max(0.5, ratio))
+}
+
+/**
+ * ORB_SCALE raw = 0.75 + (TARGET/120)*0.5, clamp [0.75, 1.3], then ÷ scale-at-120 so TARGET 120 matches current radii.
+ */
+function orbRadiusScaleForTarget(target: number) {
+  const ORB_SCALE_RAW = 0.75 + (target / 120) * 0.5
+  const ORB_SCALE_CLAMPED = Math.min(1.3, Math.max(0.75, ORB_SCALE_RAW))
+  const ORB_AT_120 = 0.75 + (120 / 120) * 0.5
+  return ORB_AT_120 > 0
+    ? Math.min(1.3, Math.max(0.75, ORB_SCALE_CLAMPED / ORB_AT_120))
+    : 1
+}
+
 function getDayNumber(today = new Date()) {
   return getDiffDaysSinceStart(today) + 1
 }
@@ -141,10 +167,18 @@ function diffToEmoji(diff: number) {
 }
 
 function diffToFeedback(diff: number) {
-  if (diff === 0) return "Perfect hit!"
+  if (diff === 0) return "Perfect! 🎯"
+  if (diff <= 3) return "So close! 🔥"
   if (diff <= 10) return "So close!"
   if (diff <= 20) return "Nice try!"
   return "Not even close..."
+}
+
+/** Stat row Diff value: green ≤5, orange ≤20, red above (uses absolute diff). */
+function diffStatDisplayColor(absDiff: number) {
+  if (absDiff <= 5) return "#16a34a"
+  if (absDiff <= 20) return "#ea580c"
+  return "#dc2626"
 }
 
 function diffToColor(diff: number) {
@@ -219,6 +253,10 @@ export default function GameCanvas() {
   const engineRef = useRef<Matter.Engine | null>(null)
   const runnerRef = useRef<Matter.Runner | null>(null)
   const ballsRef = useRef<Matter.Body[]>([])
+  /** Decorative orbs before first DROP — not in `ballsRef`, do not affect score. */
+  const idleDecorBallsRef = useRef<Matter.Body[]>([])
+  const hasPressedDropRef = useRef(false)
+  const jarShakeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ballTextureCacheRef = useRef<Map<string, string>>(new Map())
   const intervalRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const spawnBallTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -248,6 +286,10 @@ export default function GameCanvas() {
   const [stopImpact, setStopImpact] = useState(false)
   const [dropImpact, setDropImpact] = useState(false)
   const [showFeedback, setShowFeedback] = useState(false)
+  const [idleJarAtmosphere, setIdleJarAtmosphere] = useState(false)
+  const [jarShakeActive, setJarShakeActive] = useState(false)
+  const [homeScreenPromptDismissed, setHomeScreenPromptDismissed] = useState(false)
+  const [homeScreenPromptReady, setHomeScreenPromptReady] = useState(false)
   const [statsPopUpReady, setStatsPopUpReady] = useState(false)
   const [rulesPopUpReady, setRulesPopUpReady] = useState(false)
   const [isSmallScreen, setIsSmallScreen] = useState(false)
@@ -265,6 +307,9 @@ export default function GameCanvas() {
   const [soundEnabled, setSoundEnabled] = useState(() => {
     return getStorageItem("orbidropSoundEnabled") !== "false"
   })
+  /** Mutable copy for audio callbacks (e.g. Matter collision) that sit behind stale closures. */
+  const soundEnabledRef = useRef(soundEnabled)
+  soundEnabledRef.current = soundEnabled
 
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof document === "undefined") return false
@@ -287,7 +332,7 @@ export default function GameCanvas() {
 
   const withAudioContext = (fn: (ctx: AudioContext) => void) => {
     if (typeof window === "undefined") return
-    if (!soundEnabled) return
+    if (!soundEnabledRef.current) return
     const AnyWindow = window as any
     if (!audioCtxRef.current) {
       const Ctx = window.AudioContext || AnyWindow.webkitAudioContext
@@ -305,6 +350,11 @@ export default function GameCanvas() {
 
     fn(ctx)
   }
+
+  useEffect(() => {
+    setHomeScreenPromptDismissed(getStorageItem(ORBIFALL_HOME_SCREEN_PROMPT_KEY) === "true")
+    setHomeScreenPromptReady(true)
+  }, [])
 
   useEffect(() => {
     try {
@@ -373,7 +423,7 @@ export default function GameCanvas() {
       osc.frequency.exponentialRampToValueAtTime(440, now + 0.04)
 
       gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(0.05, now + 0.01)
+      gain.gain.exponentialRampToValueAtTime(Math.min(0.12, 0.05 * SFX_GAIN_MUL), now + 0.01)
       gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06)
 
       osc.connect(gain)
@@ -395,7 +445,7 @@ export default function GameCanvas() {
       osc.frequency.exponentialRampToValueAtTime(180, now + 0.05)
 
       gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(0.045, now + 0.01)
+      gain.gain.exponentialRampToValueAtTime(Math.min(0.12, 0.045 * SFX_GAIN_MUL), now + 0.01)
       gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09)
 
       osc.connect(gain)
@@ -408,6 +458,7 @@ export default function GameCanvas() {
   const playBounceSound = () => {
     const nowMs = performance.now()
     if (nowMs - lastBounceAtRef.current < 70) return
+    if (!soundEnabledRef.current) return
     lastBounceAtRef.current = nowMs
 
     withAudioContext(ctx => {
@@ -421,7 +472,7 @@ export default function GameCanvas() {
       osc.frequency.exponentialRampToValueAtTime(base * 0.7, now + 0.03)
 
       gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(0.035, now + 0.005)
+      gain.gain.exponentialRampToValueAtTime(Math.min(0.1, 0.035 * SFX_GAIN_MUL), now + 0.005)
       gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.04)
 
       osc.connect(gain)
@@ -443,7 +494,10 @@ export default function GameCanvas() {
         osc.frequency.setValueAtTime(f, now + i * 0.06)
 
         gain.gain.setValueAtTime(0.0001, now + i * 0.06)
-        gain.gain.exponentialRampToValueAtTime(0.06, now + i * 0.06 + 0.01)
+        gain.gain.exponentialRampToValueAtTime(
+          Math.min(0.11, 0.06 * SFX_GAIN_MUL),
+          now + i * 0.06 + 0.01
+        )
         gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.06 + 0.12)
 
         osc.connect(gain)
@@ -551,23 +605,36 @@ export default function GameCanvas() {
     earthCollected: 0
   })
 
-  // All-time stats + read-only today's attempt count (hydrate reload / new tab without consuming quota).
+  // All-time stats (player-stats) + today's quota/completions (peek — does not consume attempts).
   useEffect(() => {
     const run = async () => {
       try {
-        const statsRes = await fetch(
-          `/api/player-stats?date=${encodeURIComponent(todayKey)}`,
-          { credentials: "include" }
-        )
-        const statsData = await statsRes.json()
+        const [statsRes, peekRes] = await Promise.all([
+          fetch(`/api/player-stats?date=${encodeURIComponent(todayKey)}`, {
+            credentials: "include"
+          }),
+          fetch(
+            `/api/daily-attempts?date=${encodeURIComponent(todayKey)}&peek=true`,
+            { credentials: "include" }
+          )
+        ])
+        const statsData = await statsRes.json().catch(() => ({}))
+        const peekData = await peekRes.json().catch(() => ({}))
+
         if (statsData?.stats) setStats(statsData.stats as Stats)
-        const u = statsData?.attemptsUsedToday
-        if (typeof u === "number") {
-          if (u >= GAME.maxAttempts) {
-            setAttempt(GAME.maxAttempts + 1)
-          } else if (u > 0) {
-            setAttempt(Math.min(GAME.maxAttempts + 1, u))
-          }
+
+        if (!peekRes.ok) return
+
+        const completed = Math.min(
+          GAME.maxAttempts,
+          Number(peekData?.completedAttempts ?? 0)
+        )
+        const limitReached = peekData?.limitReached === true || completed >= GAME.maxAttempts
+
+        if (limitReached) {
+          setAttempt(GAME.maxAttempts + 1)
+        } else {
+          setAttempt(Math.min(GAME.maxAttempts + 1, completed + 1))
         }
       } catch {
         // ignore
@@ -770,16 +837,25 @@ export default function GameCanvas() {
     const onCollisionStart = (event: Matter.IEventCollision<Matter.Engine>) => {
       const pairs = event.pairs || []
       for (let i = 0; i < pairs.length; i++) {
-        const { bodyA, bodyB } = pairs[i]
-        // Bounce sound only when a dynamic body hits the ground
-        if (bodyA === ground && !bodyB.isStatic) {
-          playBounceSound()
-          break
+        const pair = pairs[i]
+        const { bodyA, bodyB } = pair
+        const dynamic = bodyA === ground ? bodyB : bodyB === ground ? bodyA : null
+        if (!dynamic || dynamic.isStatic) continue
+        if ((dynamic as Matter.Body & { orbifallIdleDecor?: boolean }).orbifallIdleDecor) continue
+        // No sound for sleeping / settled piles — only real impacts while moving.
+        if (dynamic.isSleeping) continue
+        const { x: vx, y: vy } = dynamic.velocity
+        const speedSq = vx * vx + vy * vy
+        if (speedSq < 2.56) continue
+        const collision = pair.collision
+        if (collision?.normal) {
+          const nx = collision.normal.x
+          const ny = collision.normal.y
+          const approach = Math.abs(vx * nx + vy * ny)
+          if (approach < 0.85 && speedSq < 12) continue
         }
-        if (bodyB === ground && !bodyA.isStatic) {
-          playBounceSound()
-          break
-        }
+        playBounceSound()
+        break
       }
     }
 
@@ -796,6 +872,25 @@ export default function GameCanvas() {
       render.textures = {}
     }
   }, [playfieldWidth, playfieldHeight])
+
+  useEffect(() => {
+    if (hasPressedDropRef.current) return
+    let cancelled = false
+    let innerRaf = 0
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(() => {
+        if (cancelled || !engineRef.current || hasPressedDropRef.current) return
+        spawnIdleDecorBalls()
+      })
+    })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(outerRaf)
+      if (innerRaf) cancelAnimationFrame(innerRaf)
+      clearIdleDecorBalls()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- idle spawn reads latest playfield/target via deps
+  }, [playfieldWidth, playfieldHeight, target, isSmallScreen])
 
   useEffect(() => {
   if (supabaseEnabled) return
@@ -827,10 +922,9 @@ useEffect(() => {
 
     if (!engineRef.current) return
 
-    // Bigger orbs → glass feels full sooner (keep max ~21 so spawn still clears walls at ±40 jitter).
-    const radius = isSmallScreen
-      ? Math.random() * 6.5 + 11.5
-      : Math.random() * 7.5 + 13.5
+    // Base radii +~18% vs prior small-orbs pass → ~60% jar fill at TARGET; still scaled by daily TARGET.
+    const baseR = isSmallScreen ? Math.random() * 4.7 + 8.3 : Math.random() * 5.3 + 10
+    const radius = baseR * orbRadiusScaleForTarget(target)
 
     const baseColor = BALL_COLORS[Math.floor(Math.random() * BALL_COLORS.length)]
     const brightnessDelta = Math.floor(Math.random() * 24) - 10
@@ -915,6 +1009,70 @@ useEffect(() => {
     setBallCount(ballsRef.current.length)
   }
 
+  const clearIdleDecorBalls = () => {
+    const world = engineRef.current?.world
+    if (!world) return
+    idleDecorBallsRef.current.forEach(ball => {
+      try {
+        Matter.World.remove(world, ball)
+      } catch {
+        /* already removed */
+      }
+    })
+    idleDecorBallsRef.current = []
+    setIdleJarAtmosphere(false)
+  }
+
+  const spawnIdleDecorBalls = () => {
+    if (!engineRef.current || hasPressedDropRef.current) return
+    clearIdleDecorBalls()
+    const world = engineRef.current.world
+    const n = 8 + Math.floor(Math.random() * 5)
+    for (let i = 0; i < n; i++) {
+      const baseR = isSmallScreen ? Math.random() * 4.7 + 8.3 : Math.random() * 5.3 + 10
+      const radius = baseR * orbRadiusScaleForTarget(target)
+      const baseColor = BALL_COLORS[Math.floor(Math.random() * BALL_COLORS.length)]
+      const brightnessDelta = Math.floor(Math.random() * 24) - 10
+      const ballOpacity = 0.92 + Math.random() * 0.08
+      const keyBucket = Math.max(-24, Math.min(24, Math.round(brightnessDelta / 3) * 3))
+      const textureKey = `${baseColor}_${keyBucket}`
+      let textureUri = ballTextureCacheRef.current.get(textureKey)
+      if (!textureUri) {
+        textureUri = makeBallTextureUri(baseColor, brightnessDelta)
+        ballTextureCacheRef.current.set(textureKey, textureUri)
+      }
+      const xScale = (radius * 2) / BALL_TEXTURE_SIZE
+      const yScale = xScale
+      const ball = Matter.Bodies.circle(
+        playfieldWidth / 2 + (Math.random() * 80 - 40),
+        -20 - i * 14,
+        radius,
+        {
+          restitution: 0.85,
+          friction: 0.02,
+          frictionAir: 0.002,
+          density: 0.001,
+          render: {
+            sprite: {
+              texture: textureUri,
+              xScale,
+              yScale
+            },
+            opacity: ballOpacity
+          }
+        }
+      )
+      ;(ball as Matter.Body & { orbifallIdleDecor?: boolean }).orbifallIdleDecor = true
+      Matter.World.add(world, ball)
+      Matter.Body.setVelocity(ball, {
+        x: (Math.random() - 0.5) * 3,
+        y: 0.5
+      })
+      idleDecorBallsRef.current.push(ball)
+    }
+    setIdleJarAtmosphere(true)
+  }
+
   const animateEarthIntoGlass = () => {
     const iconEl = earthIconRef.current
     const glassEl = glassRef.current
@@ -991,14 +1149,14 @@ useEffect(() => {
 
     let okToStart = false
     try {
-      const res = await fetch(`/api/daily-attempts?date=${encodeURIComponent(todayKey)}`, {
-        credentials: "include"
+      const res = await fetch("/api/daily-attempts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ date: todayKey })
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        // Quota API down / misconfigured (503 env, 500 DB, etc.): still allow DROP so orbs run;
-        // STOP/submit may fail until the API is healthy. Previously only localhost got this path,
-        // which made production look "broken" with no orbs when Supabase returned 5xx.
         const quotaApiServerError = res.status >= 500 && res.status < 600
         okToStart = quotaApiServerError
       } else if (data?.limitReached === true) {
@@ -1006,13 +1164,10 @@ useEffect(() => {
         okToStart = false
       } else {
         const used = Number(data?.attemptsUsed ?? 0)
-        if (used > 0) {
-          setAttempt(Math.min(GAME.maxAttempts + 1, used))
-        }
+        setAttempt(Math.min(GAME.maxAttempts, Math.max(1, used)))
         okToStart = true
       }
     } catch {
-      // Offline / network error: allow starting (submit may still fail server-side).
       okToStart = true
     } finally {
       consumeAttemptInFlightRef.current = false
@@ -1036,6 +1191,8 @@ useEffect(() => {
     setCountDisplay(0)
     earthWonThisRunRef.current = false
 
+    hasPressedDropRef.current = true
+    clearIdleDecorBalls()
     resetBalls()
 
     const earthKey = `${EARTH_DROP_KEY_PREFIX}${todayKey}`
@@ -1066,13 +1223,15 @@ useEffect(() => {
       }
 
       if (Math.random() < 0.2) {
-        spawnBallTimeoutRef.current = setTimeout(spawnBall, 60)
+        spawnBallTimeoutRef.current = setTimeout(spawnBall, 48)
       }
 
       const baseSpeed = Math.max(80, 220 - target)
-
-      const randomDelay =
-        Math.floor(Math.random() * baseSpeed) + 80
+      const speedRel = dropSpawnSpeedRelForTarget(target)
+      const randomDelay = Math.max(
+        8,
+        Math.floor(((Math.random() * baseSpeed + 80) / speedRel) * 0.8)
+      )
 
       intervalRef.current = setTimeout(spawnLoop, randomDelay)
 
@@ -1084,6 +1243,16 @@ useEffect(() => {
 
   const stopGame = () => {
     if (isStopping || !running) return
+
+    if (jarShakeTimeoutRef.current) {
+      clearTimeout(jarShakeTimeoutRef.current)
+      jarShakeTimeoutRef.current = null
+    }
+    setJarShakeActive(true)
+    jarShakeTimeoutRef.current = setTimeout(() => {
+      setJarShakeActive(false)
+      jarShakeTimeoutRef.current = null
+    }, 400)
 
     // STOP should feel punchy:
     // 1) Freeze the physics briefly
@@ -1186,17 +1355,15 @@ useEffect(() => {
       setGameFinished(true)
       setAttemptResults(prev => [...prev, diff])
       setBestDiff(prev => (prev === null ? diff : Math.min(prev, diff)))
-      setAttempt(prev => {
-        if (prev === GAME.maxAttempts) setGlassCountdownBlocked(true)
-        return prev + 1
-      })
 
-      // Persist this attempt + enforce daily limit server-side.
+      // Persist this attempt + sync attempt index from server (single source of truth).
       submitAttemptPromise?.then((data: any) => {
         if (!data) return
         if (data?.ok) {
-          const serverAttemptsUsed = Number(data.attemptsUsed ?? 0)
-          setAttempt(Math.min(GAME.maxAttempts + 1, serverAttemptsUsed + 1))
+          const completed = Number(data.attemptsUsed ?? 0)
+          const nextSlot = Math.min(GAME.maxAttempts + 1, completed + 1)
+          setAttempt(nextSlot)
+          if (nextSlot > GAME.maxAttempts) setGlassCountdownBlocked(true)
 
           if (typeof data.bestDiff === "number") {
             setBestDiff(data.bestDiff)
@@ -1219,32 +1386,14 @@ useEffect(() => {
               .catch(() => {})
           }
         } else if (typeof data.attemptsUsed === "number") {
-          // If the server rejects because the daily limit is reached,
-          // align UI to the server truth.
-          const serverAttemptsUsed = Number(data.attemptsUsed)
-          setAttempt(Math.min(GAME.maxAttempts + 1, serverAttemptsUsed + 1))
+          const completed = Number(data.attemptsUsed)
+          setAttempt(Math.min(GAME.maxAttempts + 1, completed + 1))
         }
       })
 
       if (isPerfect) setPerfectBurstId(prev => prev + 1)
       // Small “dopamine” burst for diff 1..5 (very light, not noisy).
       if (!isPerfect && diff <= 5) setRewardBurstId(prev => prev + 1)
-
-      // Tiny one-shot screen shake at reveal time.
-      if (shakeRef.current && typeof (shakeRef.current as any).animate === "function") {
-        const dx = isPerfect ? 3 : isClose ? 2.5 : 2
-        try {
-          shakeRef.current.animate(
-            [
-              { transform: "translateX(0px)" },
-              { transform: `translateX(-${dx}px)` },
-              { transform: `translateX(${dx}px)` },
-              { transform: "translateX(0px)" }
-            ],
-            { duration: 145, easing: "ease-out", fill: "forwards" }
-          )
-        } catch {}
-      }
 
       if (diff <= 3) {
         playSuccessSound()
@@ -1668,6 +1817,27 @@ const revealStyle = gameFinished
     }
   }, [feedbackMessage])
 
+  const liveCountForJar = isCounting ? countDisplay : ballCount
+  const jarProximityGlow =
+    (running || isCounting) && !gameOver && liveCountForJar >= target - 10
+
+  const showDropPulse =
+    !running && !gameOver && !isCounting && !isStopping
+
+  const diffStatAbs =
+    hasResultNumbers && (isCounting || gameFinished)
+      ? Math.abs(isCounting ? countDisplay - target : ballCount - target)
+      : null
+
+  const glassShadowBase = darkMode
+    ? "inset 2px 0 0 rgba(255,255,255,0.06), inset -2px 0 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.2), inset 0 -10px 14px rgba(0,0,0,0.15), 0 12px 30px rgba(0,0,0,0.22)"
+    : "inset 4px 0 0 rgba(110,110,110,0.40), inset -4px 0 0 rgba(110,110,110,0.40), inset 0 -1px 0 rgba(70,70,70,0.26), inset 0 -10px 14px rgba(0,0,0,0.05), inset 0 -26px 26px rgba(0,0,0,0.06), inset 0 0 0 1px rgba(0,0,0,0.03), 0 12px 30px rgba(0,0,0,0.08)"
+  const glassJarProximityGlow = jarProximityGlow
+    ? darkMode
+      ? ", 0 0 0 1px rgba(251, 191, 36, 0.2), 0 0 36px rgba(234, 88, 12, 0.16)"
+      : ", 0 0 0 2px rgba(251, 146, 60, 0.2), 0 0 32px rgba(251, 146, 60, 0.2)"
+    : ""
+
   return (
 
     <div
@@ -1679,7 +1849,10 @@ const revealStyle = gameFinished
         position:"relative",
         zIndex:0,
         width:"100%",
-        padding: isCompact ? "4px 6px 6px" : "0 0 16px 0",
+        padding: isCompact ? "4px 6px 4px" : "0 0 8px 0",
+        paddingBottom: isCompact
+          ? "max(4px, var(--orbifall-game-bottom-pad, 8px))"
+          : "max(8px, var(--orbifall-game-bottom-pad, 40px))",
         touchAction: isCompact ? "manipulation" : undefined,
         overflow: isCompact ? "hidden" : undefined
       }}
@@ -1931,12 +2104,12 @@ const revealStyle = gameFinished
   {/* RESULT */}
 
   <div
-    className="min-w-0 flex min-h-[30px] flex-col items-center justify-center gap-0.5 rounded-lg px-1.5 py-1 text-center text-[11px] leading-none sm:min-h-[32px] sm:gap-1 sm:px-2 sm:py-1.5 sm:text-xs"
+    className="min-w-0 flex min-h-[34px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-center text-[11px] leading-none ring-1 ring-inset ring-black/[0.05] sm:min-h-[36px] sm:gap-1 sm:px-2.5 sm:py-2 sm:text-xs dark:ring-white/[0.07]"
     style={{
       background: darkMode
-        ? "linear-gradient(to bottom, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 58%)," +
+        ? "linear-gradient(to bottom, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 58%)," +
           theme.card
-        : "linear-gradient(to bottom, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.35) 100%)," +
+        : "linear-gradient(to bottom, rgba(255,255,255,0.78) 0%, rgba(255,255,255,0.42) 100%)," +
           theme.card,
       border:
         stopPulse && stopDiff !== null && stopDiff <= 5
@@ -1970,6 +2143,7 @@ const revealStyle = gameFinished
     </div>
     <div
       ref={resultValueRef}
+      className="text-[14px] sm:text-[15px]"
       style={{
         fontWeight:"600",
         lineHeight:1,
@@ -1988,12 +2162,12 @@ const revealStyle = gameFinished
   {/* DIFF */}
 
   <div
-    className="min-w-0 flex min-h-[30px] flex-col items-center justify-center gap-0.5 rounded-lg px-1.5 py-1 text-center text-[11px] leading-none sm:min-h-[32px] sm:gap-1 sm:px-2 sm:py-1.5 sm:text-xs"
+    className="min-w-0 flex min-h-[34px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-center text-[11px] leading-none ring-1 ring-inset ring-black/[0.05] sm:min-h-[36px] sm:gap-1 sm:px-2.5 sm:py-2 sm:text-xs dark:ring-white/[0.07]"
     style={{
       background: darkMode
-        ? "linear-gradient(to bottom, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 58%)," +
+        ? "linear-gradient(to bottom, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 58%)," +
           theme.card
-        : "linear-gradient(to bottom, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.35) 100%)," +
+        : "linear-gradient(to bottom, rgba(255,255,255,0.78) 0%, rgba(255,255,255,0.42) 100%)," +
           theme.card,
       border:
         stopPulse && stopDiff !== null && stopDiff <= 5
@@ -2027,14 +2201,16 @@ const revealStyle = gameFinished
     </div>
     <div
       ref={diffValueRef}
+      className="text-[14px] sm:text-[15px]"
       style={{
         fontWeight:"600",
         lineHeight:1,
-        color: hasResultNumbers
-          ? isCounting
-            ? countingDiffColor
-            : finishedDiffColor
-          : undefined,
+        color:
+          diffStatAbs !== null
+            ? diffStatDisplayColor(diffStatAbs)
+            : hasResultNumbers
+            ? theme.text
+            : undefined,
         transition: "color 180ms ease"
       }}
     >
@@ -2045,12 +2221,12 @@ const revealStyle = gameFinished
   {/* BEST */}
 
   <div
-    className="min-w-0 flex min-h-[30px] flex-col items-center justify-center gap-0.5 rounded-lg px-1.5 py-1 text-center text-[11px] leading-none sm:min-h-[32px] sm:gap-1 sm:px-2 sm:py-1.5 sm:text-xs"
+    className="min-w-0 flex min-h-[34px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-center text-[11px] leading-none ring-1 ring-inset ring-black/[0.05] sm:min-h-[36px] sm:gap-1 sm:px-2.5 sm:py-2 sm:text-xs dark:ring-white/[0.07]"
     style={{
       background: darkMode
-        ? "linear-gradient(to bottom, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 58%)," +
+        ? "linear-gradient(to bottom, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 58%)," +
           theme.card
-        : "linear-gradient(to bottom, rgba(255,255,255,0.65) 0%, rgba(255,255,255,0.35) 100%)," +
+        : "linear-gradient(to bottom, rgba(255,255,255,0.78) 0%, rgba(255,255,255,0.42) 100%)," +
           theme.card,
       border:`1px solid ${darkMode ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)"}`,
       boxShadow: darkMode ? "0 1px 3px rgba(0,0,0,0.32)" : "0 1px 3px rgba(0,0,0,0.045)",
@@ -2062,6 +2238,7 @@ const revealStyle = gameFinished
       Best
     </div>
     <div
+      className="text-[14px] sm:text-[15px]"
       style={{
         fontWeight:"600",
         lineHeight:1,
@@ -2094,6 +2271,7 @@ const revealStyle = gameFinished
         />
 
       <div
+        className={jarShakeActive ? "orbifall-jar-shake-once" : undefined}
         style={{
           width: `${playfieldWidth}px`,
           height: `${playfieldHeight}px`,
@@ -2122,6 +2300,19 @@ const revealStyle = gameFinished
         />
 
         <div
+          className={
+            idleJarAtmosphere && !running && !isStopping ? "orbifall-jar-idle-breathe" : undefined
+          }
+          style={{
+            width: "100%",
+            height: "100%",
+            borderRadius: "0 0 16px 16px",
+            overflow: "hidden",
+            position: "relative",
+            zIndex: 1
+          }}
+        >
+        <div
           ref={glassRef}
           style={{
             width: "100%",
@@ -2129,14 +2320,17 @@ const revealStyle = gameFinished
             borderRadius: "0 0 16px 16px",
             background: theme.glass,
             border: `1px solid ${
-              darkMode ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)"
+              jarProximityGlow
+                ? darkMode
+                  ? "rgba(251, 191, 36, 0.28)"
+                  : "rgba(251, 146, 60, 0.35)"
+                : darkMode
+                ? "rgba(255,255,255,0.12)"
+                : "rgba(0,0,0,0.10)"
             }`,
             overflow: "hidden",
             position: "relative",
-            zIndex: 1,
-          boxShadow: darkMode
-            ? "inset 2px 0 0 rgba(255,255,255,0.06), inset -2px 0 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.2), inset 0 -10px 14px rgba(0,0,0,0.15), 0 12px 30px rgba(0,0,0,0.22)"
-            : "inset 4px 0 0 rgba(110,110,110,0.40), inset -4px 0 0 rgba(110,110,110,0.40), inset 0 -1px 0 rgba(70,70,70,0.26), inset 0 -10px 14px rgba(0,0,0,0.05), inset 0 -26px 26px rgba(0,0,0,0.06), inset 0 0 0 1px rgba(0,0,0,0.03), 0 12px 30px rgba(0,0,0,0.08)",
+            boxShadow: glassShadowBase + glassJarProximityGlow,
           transform:
             stopImpact || dropImpact
               ? "translateY(-1px) scale(1.02)"
@@ -2144,7 +2338,7 @@ const revealStyle = gameFinished
               ? "translateY(-2px) scale(1)"
               : "scale(1)",
           transition:
-            "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 220ms ease"
+            "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 220ms ease, box-shadow 320ms ease, border-color 320ms ease"
           }}
         >
 
@@ -2276,6 +2470,7 @@ const revealStyle = gameFinished
         </div>
 
         <div
+          aria-hidden="true"
           style={{
             position: "absolute",
             top: "28%",
@@ -2286,15 +2481,8 @@ const revealStyle = gameFinished
             fontSize: isCompact ? "118px" : "138px",
             fontWeight: "800",
             color: theme.feedbackText,
-            opacity:
-              running && !isCounting
-                ? 0.1
-                : stopImpact || dropImpact
-                ? 0.14
-                : 0.16,
-            textShadow: darkMode
-              ? "0 0 18px rgba(255,255,255,0.10), 0 0 10px rgba(255,255,255,0.06), 0 2px 8px rgba(0,0,0,0.32)"
-              : "0 0 18px rgba(255,255,255,0.16), 0 0 10px rgba(255,255,255,0.08), 0 2px 10px rgba(0,0,0,0.05)",
+            opacity: 0.06,
+            textShadow: "none",
             letterSpacing: "-0.02em",
             filter: "blur(0.45px)",
             pointerEvents: "none",
@@ -2376,14 +2564,17 @@ const revealStyle = gameFinished
             height:"14%",
             background:
               "linear-gradient(to top, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0.028) 38%, rgba(0,0,0,0) 100%)",
-            pointerEvents:"none"
+            pointerEvents:"none",
+            zIndex: 1
           }}
         />
 
         </div>
+        </div>
       </div>
 
       <button
+        className={showDropPulse ? "orbifall-drop-btn-pulse" : undefined}
         onClick={() => {
           triggerActionButtonFeedback()
       if (gameOver) {
@@ -2416,9 +2607,12 @@ const revealStyle = gameFinished
         }}
         disabled={isCounting || isStopping}
         style={{
-          marginTop:isCompact ? "1px" : "4px",
-          padding:isCompact ? "16px 34px" : "18px 50px",
-          fontSize:"24px",
+          marginTop: isCompact ? "0px" : "2px",
+          width: "min(85vw, 320px)",
+          maxWidth: 320,
+          padding: isCompact ? "12px 20px" : "14px 24px",
+          fontSize: 20,
+          fontWeight: 700,
           border:"none",
           borderRadius:"10px",
           color: isCounting || isStopping ? "#ddd" : "white",
@@ -2431,8 +2625,7 @@ const revealStyle = gameFinished
             ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #ef5a66 0%, #e63946 100%)"
             : "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #39b2a2 0%, #2a9d8f 100%)",
           cursor: isCounting || isStopping ? "default" : "pointer",
-          minWidth:"160px",
-          minHeight:"64px",
+          minHeight: 64,
           touchAction:"manipulation",
           willChange:"transform, box-shadow, filter",
           transform: actionButtonPressed
@@ -2445,9 +2638,12 @@ const revealStyle = gameFinished
             ? "0 2px 6px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.18)"
             : actionButtonHovered
             ? "0 16px 40px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.30)"
+            : showDropPulse
+            ? undefined
             : "0 14px 34px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.22)",
-          transition:
-            "transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 120ms ease, filter 120ms ease"
+          transition: showDropPulse
+            ? "transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 120ms ease"
+            : "transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 120ms ease, filter 120ms ease"
         }}
       >
         {gameOver ? "STATS" : running ? "STOP" : isStopping ? "STOP" : "DROP"}
@@ -2638,6 +2834,56 @@ const revealStyle = gameFinished
             <p style={{marginTop:"16px",fontSize:"14px",color: theme.modalMuted,fontWeight:"bold"}}>
               New challenge in {timeLeft}
             </p>
+
+            {stats.played === 1 &&
+              homeScreenPromptReady &&
+              !homeScreenPromptDismissed && (
+                <div
+                  role="status"
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: 8,
+                    marginTop: 16,
+                    paddingTop: 14,
+                    borderTop: `1px solid ${theme.border}`,
+                    fontSize: 13,
+                    lineHeight: 1.35,
+                    color: theme.modalMuted,
+                    textAlign: "left"
+                  }}
+                >
+                  <span style={{ minWidth: 0, flex: 1 }}>
+                    Play daily — add Orbidrop to your home screen
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Dismiss home screen tip"
+                    onClick={() => {
+                      setStorageItem(ORBIFALL_HOME_SCREEN_PROMPT_KEY, "true")
+                      setHomeScreenPromptDismissed(true)
+                    }}
+                    style={{
+                      flexShrink: 0,
+                      width: 28,
+                      height: 28,
+                      marginTop: -4,
+                      border: "none",
+                      borderRadius: 8,
+                      background: darkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
+                      color: theme.modalText,
+                      cursor: "pointer",
+                      fontSize: 14,
+                      lineHeight: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center"
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
 
           </div>
 
@@ -2887,7 +3133,12 @@ const revealStyle = gameFinished
             </button>
             <button
               type="button"
-              onClick={() => setSoundEnabled(prev => !prev)}
+              onClick={e => {
+                e.preventDefault()
+                e.stopPropagation()
+                setSoundEnabled(prev => !prev)
+              }}
+              onPointerDown={e => e.stopPropagation()}
               aria-label={
                 soundEnabled
                   ? "Turn sound effects off"
@@ -2905,7 +3156,9 @@ const revealStyle = gameFinished
                 fontSize: isSmallScreen ? "14px" : "16px",
                 cursor: "pointer",
                 color: soundEnabled ? "white" : theme.muted,
-                boxShadow: "0 6px 16px rgba(0,0,0,0.18)"
+                boxShadow: "0 6px 16px rgba(0,0,0,0.18)",
+                touchAction: "manipulation",
+                WebkitTapHighlightColor: "transparent"
               }}
             >
               {soundEnabled ? "🔊" : "🔇"}

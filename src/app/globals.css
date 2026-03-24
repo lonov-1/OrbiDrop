@@ -104,14 +104,113 @@ body {
   flex-direction: column;
   align-items: center;
   width: 100%;
+}
+
+.orbifall-main.orbifall-home .orbifall-game-wrap {
   padding-top: 20px;
 }
 
-/* Prevent scroll on home page */
-body:has(.orbifall-main) {
+/* Prevent scroll on home page (game-only layout) */
+body:has(.orbifall-main:not(.orbifall-home)) {
   overflow: hidden;
   height: 100vh;
   height: 100dvh;
+}
+
+/* Home: allow vertical scroll for SEO sections below the game */
+html:has(.orbifall-home),
+body:has(.orbifall-home) {
+  height: auto;
+  min-height: 100%;
+  min-height: 100dvh;
+}
+
+body:has(.orbifall-home) {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* Top-align like pre-SEO home: avoid vertical centering of the tall ScaleToFit frame */
+.orbifall-main.orbifall-home {
+  height: auto;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: visible;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  /*
+   * Space reserved inside GameCanvas (padding-bottom) so DROP sits above the docked bar.
+   * Keep in sync with .orbifall-site-footer height + safe area.
+   */
+  --orbifall-game-bottom-pad: calc(40px + env(safe-area-inset-bottom, 0px));
+}
+
+/*
+ * Site link bar: docked to the bottom of the viewport (above home indicator).
+ * Theme/sound FABs stay above (higher z-index). Game column uses --orbifall-game-bottom-pad.
+ */
+.orbifall-site-footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1200;
+  display: flex;
+  justify-content: center;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  pointer-events: none;
+}
+
+.orbifall-site-footer-inner {
+  pointer-events: auto;
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  column-gap: 0.2rem;
+  row-gap: 0.1rem;
+  padding: 0.35rem 0.75rem;
+  margin: 0;
+  border-radius: 0;
+  border: none;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 -2px 14px rgba(0, 0, 0, 0.04);
+  font-size: 0.5625rem;
+  line-height: 1.2;
+  letter-spacing: 0.03em;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+[data-theme="dark"] .orbifall-site-footer-inner {
+  border-top-color: rgba(255, 255, 255, 0.08);
+  background: rgba(18, 18, 18, 0.78);
+  box-shadow: 0 -2px 18px rgba(0, 0, 0, 0.35);
+}
+
+.orbifall-site-footer-inner a {
+  color: inherit;
+  opacity: 0.52;
+  text-decoration: none;
+  padding: 0.02rem 0.06rem;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.orbifall-site-footer-inner a:hover {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.orbifall-site-footer-sep {
+  opacity: 0.28;
+  user-select: none;
+  font-weight: 300;
 }
 
 /* Top game UI — subtle motion (premium, not loud) */
@@ -144,9 +243,66 @@ body:has(.orbifall-main) {
   animation: orbifall-attempt-pulse 2s ease-in-out infinite;
 }
 
+@keyframes dropPulse {
+  0%,
+  100% {
+    box-shadow: 0 4px 20px rgba(26, 158, 143, 0.3);
+  }
+  50% {
+    box-shadow:
+      0 4px 40px rgba(26, 158, 143, 0.6),
+      0 0 0 8px rgba(26, 158, 143, 0.1);
+  }
+}
+
+.orbifall-drop-btn-pulse {
+  animation: dropPulse 2s ease-in-out infinite;
+}
+
+@keyframes orbifall-jar-idle-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.02);
+  }
+}
+
+.orbifall-jar-idle-breathe {
+  animation: orbifall-jar-idle-breathe 2s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+
+@keyframes orbifall-jar-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-6px);
+  }
+  40% {
+    transform: translateX(6px);
+  }
+  60% {
+    transform: translateX(-4px);
+  }
+  80% {
+    transform: translateX(3px);
+  }
+}
+
+.orbifall-jar-shake-once {
+  animation: orbifall-jar-shake 400ms ease-out forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .orbifall-target--live,
-  .orbifall-attempt--live {
+  .orbifall-attempt--live,
+  .orbifall-drop-btn-pulse,
+  .orbifall-jar-idle-breathe,
+  .orbifall-jar-shake-once {
     animation: none;
   }
 }

@@ -41,7 +41,7 @@ export default function ScaleToFit({ children }: { children: React.ReactNode }) 
         width: FRAME_WIDTH,
         height: FRAME_HEIGHT,
         transform: `scale(${scale})`,
-        transformOrigin: "center center",
+        transformOrigin: "top center",
       }}
     >
       {children}

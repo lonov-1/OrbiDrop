@@ -87,7 +87,7 @@ export async function POST(req: Request) {
     }
 
     const quotaUsed = quotaRow?.attempts_used ?? 0
-    // Must have reserved an attempt via GET /api/daily-attempts (no peek) before STOP.
+    // Must have reserved an attempt via POST /api/daily-attempts before STOP.
     if (quotaUsed <= rowsUsed) {
       return NextResponse.json(
         {

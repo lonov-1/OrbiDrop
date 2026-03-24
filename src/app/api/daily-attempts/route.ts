@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
-import { createClient } from "@supabase/supabase-js"
+import { createClient, SupabaseClient } from "@supabase/supabase-js"
 import {
   ORBIFALL_PLAYER_COOKIE,
   applyOrbifallPlayerCookie,
@@ -11,33 +11,140 @@ export const dynamic = "force-dynamic"
 
 /**
  * Aggregate counter: (player_id, day, attempts_used).
- * Deployed table name is `player_daily_quota` (same columns as spec).
+ * Table: `player_daily_quota`.
  */
 const DAILY_COUNTER_TABLE = "player_daily_quota"
+const DAILY_ATTEMPTS_TABLE = "player_daily_attempts"
 const MAX_ATTEMPTS = 3
 const CONCURRENCY_RETRIES = 12
 
+async function countCompletedAttempts(
+  supabase: SupabaseClient,
+  playerId: string,
+  day: string
+): Promise<{ completed: number; error: Error | null }> {
+  const { count, error } = await supabase
+    .from(DAILY_ATTEMPTS_TABLE)
+    .select("id", { count: "exact", head: true })
+    .eq("player_id", playerId)
+    .eq("day", day)
+
+  if (error) {
+    return { completed: 0, error: new Error(error.message) }
+  }
+  return { completed: Math.min(MAX_ATTEMPTS, count ?? 0), error: null }
+}
+
+function makeSupabase() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!supabaseUrl?.trim() || !serviceKey?.trim()) return null
+  return createClient(supabaseUrl, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  })
+}
+
+/**
+ * GET ?date=YYYY-MM-DD&peek=true — read quota + completed rows; does not consume an attempt.
+ */
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url)
     const day = url.searchParams.get("date")?.trim()
+    const peek = url.searchParams.get("peek") === "true"
+
     if (!day) {
-      return NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 400 })
+      return NextResponse.json(
+        { attemptsUsed: 0, completedAttempts: 0, limitReached: false },
+        { status: 400 }
+      )
+    }
+
+    if (!peek) {
+      return NextResponse.json(
+        {
+          error: "GET requires peek=true. Use POST /api/daily-attempts with { date } to reserve an attempt."
+        },
+        { status: 400 }
+      )
     }
 
     const cookieStore = await cookies()
     const { playerId, isNew } = getOrMintOrbifallPlayerId(cookieStore.get(ORBIFALL_PLAYER_COOKIE)?.value)
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-    if (!supabaseUrl?.trim() || !serviceKey?.trim()) {
-      const res = NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 503 })
+    const supabase = makeSupabase()
+    if (!supabase) {
+      const res = NextResponse.json(
+        { attemptsUsed: 0, completedAttempts: 0, limitReached: false },
+        { status: 503 }
+      )
       return applyOrbifallPlayerCookie(res, playerId, isNew)
     }
 
-    const supabase = createClient(supabaseUrl, serviceKey, {
-      auth: { persistSession: false, autoRefreshToken: false }
+    const { data: row, error: selErr } = await supabase
+      .from(DAILY_COUNTER_TABLE)
+      .select("attempts_used")
+      .eq("player_id", playerId)
+      .eq("day", day)
+      .maybeSingle()
+
+    if (selErr) {
+      const res = NextResponse.json(
+        { attemptsUsed: 0, completedAttempts: 0, limitReached: false },
+        { status: 500 }
+      )
+      return applyOrbifallPlayerCookie(res, playerId, isNew)
+    }
+
+    const quota = row?.attempts_used ?? 0
+    const { completed, error: countErr } = await countCompletedAttempts(supabase, playerId, day)
+
+    if (countErr) {
+      const res = NextResponse.json(
+        { attemptsUsed: quota, completedAttempts: 0, limitReached: quota >= MAX_ATTEMPTS },
+        { status: 500 }
+      )
+      return applyOrbifallPlayerCookie(res, playerId, isNew)
+    }
+
+    const limitReached = quota >= MAX_ATTEMPTS || completed >= MAX_ATTEMPTS
+
+    const res = NextResponse.json({
+      attemptsUsed: quota,
+      completedAttempts: completed,
+      limitReached
     })
+    return applyOrbifallPlayerCookie(res, playerId, isNew)
+  } catch {
+    return NextResponse.json(
+      { attemptsUsed: 0, completedAttempts: 0, limitReached: false },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * POST { date } — atomically increment daily quota (reserve one DROP). Server source of truth.
+ */
+export async function POST(req: Request) {
+  try {
+    const body = (await req.json().catch(() => ({}))) as { date?: string }
+    const day = body.date?.trim()
+    if (!day) {
+      return NextResponse.json({ error: "Missing date" }, { status: 400 })
+    }
+
+    const cookieStore = await cookies()
+    const { playerId, isNew } = getOrMintOrbifallPlayerId(cookieStore.get(ORBIFALL_PLAYER_COOKIE)?.value)
+
+    const supabase = makeSupabase()
+    if (!supabase) {
+      const res = NextResponse.json(
+        { attemptsUsed: 0, limitReached: false },
+        { status: 503 }
+      )
+      return applyOrbifallPlayerCookie(res, playerId, isNew)
+    }
 
     for (let attempt = 0; attempt < CONCURRENCY_RETRIES; attempt++) {
       const { data: row, error: selErr } = await supabase
@@ -105,7 +212,7 @@ export async function GET(req: Request) {
       if (updated?.attempts_used === next) {
         const res = NextResponse.json({
           attemptsUsed: next,
-          limitReached: false
+          limitReached: next >= MAX_ATTEMPTS
         })
         return applyOrbifallPlayerCookie(res, playerId, isNew)
       }

@@ -1,3 +1,15 @@
+import type { Metadata } from "next"
+import { LegalBackLink } from "@/app/components/LegalBackLink"
+
+export const metadata: Metadata = {
+  title: "Terms of Use",
+  description:
+    "Terms of Use for Orbidrop: fair play, availability, liability, and conditions for using the free browser game.",
+  alternates: {
+    canonical: "/terms",
+  },
+}
+
 export default function Terms() {
   return (
     <main
@@ -9,49 +21,35 @@ export default function Terms() {
         lineHeight: "1.6"
       }}
     >
+      <LegalBackLink />
       <h1>Terms of Use</h1>
 
+      <h3>1. General</h3>
+      <p>Orbidrop is a free browser game provided for entertainment.</p>
+
+      <h3>2. No Guarantee</h3>
       <p>
-        Welcome to Orbifall. By using this website, you agree to the following terms.
+        We do not guarantee that the game will always work perfectly or be available at
+        all times.
       </p>
 
-      <h2>1. General</h2>
+      <h2>3. Data</h2>
       <p>
-        Orbifall is a free browser-based game provided for entertainment purposes only.
-        There is no guarantee of availability, accuracy, or uninterrupted service.
+        Game progress may be stored locally or online. We do not guarantee permanent
+        storage.
       </p>
 
-      <h2>2. No Warranty</h2>
-      <p>
-        The game is provided "as is" without warranties of any kind. We do not guarantee
-        that the game will be error-free or always available.
-      </p>
+      <h3>4. Fair Play</h3>
+      <p>Do not cheat, exploit bugs, or use bots.</p>
 
-      <h2>3. Limitation of Liability</h2>
-      <p>
-        We are not liable for any damages arising from the use or inability to use the
-        game.
-      </p>
-
-      <h2>4. Game Mechanics</h2>
-      <p>
-        Orbifall includes daily challenges and randomized elements. Results may vary and
-        are not guaranteed to be identical across all users in offline scenarios.
-      </p>
-
-      <h2>5. No Monetary Value</h2>
-      <p>
-        This game does not offer real money rewards. All scores and achievements have no
-        real-world value.
-      </p>
+      <h3>5. Liability</h3>
+      <p>We are not responsible for any damages or data loss.</p>
 
       <h2>6. Changes</h2>
-      <p>
-        We reserve the right to modify or discontinue the game at any time without notice.
-      </p>
+      <p>The game may be changed or removed at any time.</p>
 
-      <h2>7. Contact</h2>
-      <p>For questions, please contact: your@email.com</p>
+      <h3>7. Law</h3>
+      <p>Austrian law applies.</p>
     </main>
   )
 }

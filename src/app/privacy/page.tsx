@@ -1,3 +1,15 @@
+import type { Metadata } from "next"
+import { LegalBackLink } from "@/app/components/LegalBackLink"
+
+export const metadata: Metadata = {
+  title: "Privacy Policy",
+  description:
+    "Privacy Policy for Orbidrop: how we handle data, hosting, and your rights when you play our browser game.",
+  alternates: {
+    canonical: "/privacy",
+  },
+}
+
 export default function Privacy() {
   return (
     <main
@@ -9,43 +21,48 @@ export default function Privacy() {
         lineHeight: "1.6"
       }}
     >
+      <LegalBackLink />
       <h1>Privacy Policy</h1>
 
-      <p>This website ("Orbifall") respects your privacy.</p>
-
-      <h2>1. Data Collection</h2>
-      <p>We do not collect personal data such as names or email addresses.</p>
-
-      <h2>2. Local Storage</h2>
       <p>
-        The game uses your browser's localStorage to save game progress, statistics, and
-        preferences. This data remains on your device and is not transmitted to any
-        server.
+        We take your privacy seriously. This website is designed to collect as little
+        personal data as possible.
       </p>
 
-      <h2>3. Server Data (if applicable)</h2>
+      <h3>Data We Process</h3>
+      <p>When you use Orbidrop, we may process:</p>
+      <ul>
+        <li>Anonymous PlayID</li>
+        <li>Game scores and progress</li>
+        <li>Technical data (e.g. errors, performance)</li>
+      </ul>
+      <p>This data is not used to identify you personally.</p>
+
+      <h3>Storage</h3>
       <p>
-        If future features include online scores or global rankings, anonymous data such
-        as scores or randomly generated user IDs may be stored.
+        Data is stored locally in your browser and on servers provided by Supabase.
       </p>
 
-      <h2>4. Cookies</h2>
-      <p>This website does not use cookies for tracking or advertising purposes.</p>
-
-      <h2>5. Third-Party Services</h2>
+      <h2>Hosting</h2>
       <p>
-        We may use hosting providers or analytics tools in the future. These services may
-        collect anonymized technical data (e.g., IP address, browser type).
+        This website is hosted by Vercel (USA). Your IP address may be processed as part
+        of normal operation.
       </p>
 
-      <h2>6. Your Rights</h2>
+      <h3>Cookies</h3>
       <p>
-        You have the right to request information about stored data or request deletion,
-        if applicable.
+        We do not use tracking cookies. Only necessary local storage is used to make the
+        game work.
       </p>
 
-      <h2>7. Contact</h2>
-      <p>For privacy-related questions, contact: your@email.com</p>
+      <h3>Purpose</h3>
+      <p>Data is used only to run and improve the game.</p>
+
+      <h3>Your Rights</h3>
+      <p>
+        You have the right to request access or deletion of your data. Contact:{" "}
+        <a href="mailto:leon1992@hotmail.de">leon1992@hotmail.de</a>
+      </p>
     </main>
   )
 }

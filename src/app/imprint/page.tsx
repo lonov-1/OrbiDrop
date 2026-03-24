@@ -1,3 +1,15 @@
+import type { Metadata } from "next"
+import { LegalBackLink } from "@/app/components/LegalBackLink"
+
+export const metadata: Metadata = {
+  title: "Imprint",
+  description:
+    "Legal imprint for Orbidrop (orbidrop.com): operator contact and site information.",
+  alternates: {
+    canonical: "/imprint",
+  },
+}
+
 export default function Imprint() {
   return (
     <main
@@ -9,28 +21,34 @@ export default function Imprint() {
         lineHeight: "1.6"
       }}
     >
+      <LegalBackLink />
       <h1>Imprint</h1>
 
-      <p>Information according to § 5 ECG</p>
+      <p>This website is operated by:</p>
 
       <p>
-        Name: Leon Ring
+        Leon Ring
         <br />
-        Address: Thunrgasse 19, 1090 Vienna, Austria
+        Thurngasse 19/10
         <br />
-        Email: leon.ring@yahoo.com
-      </p>
-
-      <h2>Disclaimer</h2>
-      <p>
-        The contents of this website have been created with care. However, we do not
-        guarantee the accuracy, completeness, or timeliness of the content.
+        1090 Vienna
+        <br />
+        Austria
       </p>
 
       <p>
-        We are not responsible for external links. The operators of linked pages are
-        solely responsible for their content.
+        Email:{" "}
+        <a href="mailto:leon1992@hotmail.de">leon1992@hotmail.de</a>
       </p>
+
+      <p>
+        Website:{" "}
+        <a href="https://orbidrop.com" rel="noopener noreferrer">
+          https://orbidrop.com
+        </a>
+      </p>
+
+      <p>This is a private, non-commercial project.</p>
     </main>
   )
 }
