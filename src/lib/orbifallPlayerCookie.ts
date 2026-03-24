@@ -23,13 +23,19 @@ export function getOrMintOrbifallPlayerId(cookieValue: string | undefined): {
   return { playerId: randomUUID(), isNew: true }
 }
 
+/**
+ * Always set the httpOnly player id cookie when we know it.
+ * (Previously only on `isNew`, which broke sessions if the browser dropped the cookie
+ * or the first Set-Cookie was missed — DROP and STOP then used different player_ids.)
+ */
 export function applyOrbifallPlayerCookie(
   res: NextResponse,
   playerId: string,
-  isNew: boolean
+  _isNew?: boolean
 ): NextResponse {
-  if (isNew) {
-    res.cookies.set(ORBIFALL_PLAYER_COOKIE, playerId, orbifallPlayerCookieOptions())
+  const id = playerId?.trim()
+  if (id) {
+    res.cookies.set(ORBIFALL_PLAYER_COOKIE, id, orbifallPlayerCookieOptions())
   }
   return res
 }

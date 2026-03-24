@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
 import { tryGetSupabaseAdmin } from "@/lib/supabaseServer"
-import { ORBIFALL_PLAYER_COOKIE } from "@/lib/orbifallPlayerCookie"
+import {
+  applyOrbifallPlayerCookie,
+  getOrMintOrbifallPlayerId,
+  ORBIFALL_PLAYER_COOKIE
+} from "@/lib/orbifallPlayerCookie"
 
 export const dynamic = "force-dynamic"
 
@@ -11,12 +15,31 @@ type Body = {
   target: number
 }
 
+const MAX_ATTEMPTS = 3
+
+function jsonWithPlayerCookie(
+  body: unknown,
+  status: number,
+  playerId: string,
+  isNew: boolean
+) {
+  return applyOrbifallPlayerCookie(NextResponse.json(body, { status }), playerId, isNew)
+}
+
 export async function POST(req: Request) {
+  let playerId = ""
+  let isNew = false
+
   try {
     const cookieStore = await cookies()
-    const playerId = cookieStore.get(ORBIFALL_PLAYER_COOKIE)?.value?.trim()
-    if (!playerId) {
-      return NextResponse.json({ ok: false, error: "Missing session" }, { status: 401 })
+    const minted = getOrMintOrbifallPlayerId(
+      cookieStore.get(ORBIFALL_PLAYER_COOKIE)?.value
+    )
+    playerId = minted.playerId
+    isNew = minted.isNew
+
+    if (!playerId.trim()) {
+      return NextResponse.json({ ok: false, error: "Invalid session" }, { status: 400 })
     }
 
     const body = (await req.json()) as Partial<Body>
@@ -25,12 +48,17 @@ export async function POST(req: Request) {
     const target = body.target
 
     if (!day || typeof ballCount !== "number" || typeof target !== "number") {
-      return NextResponse.json({ error: "Missing or invalid fields" }, { status: 400 })
+      return jsonWithPlayerCookie(
+        { error: "Missing or invalid fields" },
+        400,
+        playerId,
+        isNew
+      )
     }
 
     const admin = tryGetSupabaseAdmin()
     if (!admin.ok) {
-      return NextResponse.json({ error: admin.message }, { status: 503 })
+      return jsonWithPlayerCookie({ error: admin.message }, 503, playerId, isNew)
     }
     const supabase = admin.supabase
 
@@ -39,9 +67,11 @@ export async function POST(req: Request) {
       .upsert({ player_id: playerId }, { onConflict: "player_id" })
 
     if (profileErr) {
-      return NextResponse.json(
+      return jsonWithPlayerCookie(
         { ok: false, error: profileErr.message, code: profileErr.code },
-        { status: 500 }
+        500,
+        playerId,
+        isNew
       )
     }
 
@@ -52,23 +82,26 @@ export async function POST(req: Request) {
       .eq("player_id", playerId)
 
     if (countErr) {
-      return NextResponse.json(
+      return jsonWithPlayerCookie(
         { ok: false, error: countErr.message, code: countErr.code },
-        { status: 500 }
+        500,
+        playerId,
+        isNew
       )
     }
 
     const rowsUsed = attemptsCount ?? 0
-    const maxAttempts = 3
 
-    if (rowsUsed >= maxAttempts) {
-      return NextResponse.json(
+    if (rowsUsed >= MAX_ATTEMPTS) {
+      return jsonWithPlayerCookie(
         {
           ok: false,
           reason: "limit_reached",
           attemptsUsed: rowsUsed
         },
-        { status: 403 }
+        403,
+        playerId,
+        isNew
       )
     }
 
@@ -80,23 +113,54 @@ export async function POST(req: Request) {
       .maybeSingle()
 
     if (quotaErr) {
-      return NextResponse.json(
+      return jsonWithPlayerCookie(
         { ok: false, error: quotaErr.message, code: quotaErr.code },
-        { status: 500 }
+        500,
+        playerId,
+        isNew
       )
     }
 
-    const quotaUsed = quotaRow?.attempts_used ?? 0
-    // Must have reserved an attempt via POST /api/daily-attempts before STOP.
+    let quotaUsed = quotaRow?.attempts_used ?? 0
+
+    /*
+     * If DROP reserve failed (503 / offline) but the client still played, quota can stay 0
+     * while rowsUsed is 0 → old check `quotaUsed <= rowsUsed` blocked every save.
+     * Heal: ensure attempts_used >= rowsUsed + 1 so this STOP can record one completion.
+     */
+    if (quotaUsed <= rowsUsed && rowsUsed < MAX_ATTEMPTS) {
+      const needed = rowsUsed + 1
+      const nextQuota = Math.min(MAX_ATTEMPTS, Math.max(quotaUsed, needed))
+      const { error: healErr } = await supabase.from("player_daily_quota").upsert(
+        {
+          player_id: playerId,
+          day,
+          attempts_used: nextQuota
+        },
+        { onConflict: "player_id,day" }
+      )
+      if (healErr) {
+        return jsonWithPlayerCookie(
+          { ok: false, error: healErr.message, code: healErr.code },
+          500,
+          playerId,
+          isNew
+        )
+      }
+      quotaUsed = nextQuota
+    }
+
     if (quotaUsed <= rowsUsed) {
-      return NextResponse.json(
+      return jsonWithPlayerCookie(
         {
           ok: false,
           reason: "reserved_attempt_required",
           attemptsUsed: rowsUsed,
           quotaUsed
         },
-        { status: 403 }
+        403,
+        playerId,
+        isNew
       )
     }
 
@@ -113,14 +177,16 @@ export async function POST(req: Request) {
     })
 
     if (insertErr) {
-      return NextResponse.json(
+      return jsonWithPlayerCookie(
         { ok: false, error: insertErr.message ?? "Insert failed" },
-        { status: 500 }
+        500,
+        playerId,
+        isNew
       )
     }
 
     const attemptsUsedNext = attemptsUsed + 1
-    const isDayComplete = attemptsUsedNext >= maxAttempts
+    const isDayComplete = attemptsUsedNext >= MAX_ATTEMPTS
 
     let bestDiff: number | null = null
     if (isDayComplete) {
@@ -169,17 +235,24 @@ export async function POST(req: Request) {
       )
     }
 
-    return NextResponse.json({
-      ok: true,
-      attemptsUsed: attemptsUsedNext,
-      maxAttempts,
-      diff,
-      isDayComplete,
-      bestDiff
-    })
+    return jsonWithPlayerCookie(
+      {
+        ok: true,
+        attemptsUsed: attemptsUsedNext,
+        maxAttempts: MAX_ATTEMPTS,
+        diff,
+        isDayComplete,
+        bestDiff
+      },
+      200,
+      playerId,
+      isNew
+    )
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error"
+    if (playerId.trim()) {
+      return jsonWithPlayerCookie({ ok: false, error: message }, 500, playerId, isNew)
+    }
     return NextResponse.json({ ok: false, error: message }, { status: 500 })
   }
 }
-
