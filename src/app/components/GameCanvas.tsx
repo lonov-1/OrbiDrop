@@ -23,8 +23,25 @@ const GAME = {
   maxAttempts: 3
 } as const
 
-/** Web Audio peak gain multiplier — applied to all SFX (capped per layer to limit clipping). */
-const SFX_GAIN_MUL = 1.75
+/**
+ * Layered SFX: UI bus (start/stop) kept quiet; physics bus (collisions) a touch more present.
+ * All peaks are linear gain before bus; buses scale to destination.
+ */
+const AUDIO = {
+  UI_BUS: 0.92,
+  PHYSICS_BUS: 0.52,
+  /** START / DROP — low peak, slightly longer tail so it stays in the background */
+  START_PEAK: 0.03,
+  START_MS: 0.084,
+  /** STOP — softer than before; longer settle */
+  STOP_CLICK_PEAK: 0.038,
+  STOP_CLICK_MS: 0.2,
+  /** Ball hit — scaled by impact */
+  BOUNCE_PEAK_MAX: 0.055,
+  BOUNCE_MS: 0.038,
+  /** Max collision SFX per rolling second */
+  BOUNCE_MAX_PER_SEC: 5
+} as const
 
 /** Matches `ground` body in Matter (floor collision top = playfieldHeight - this). */
 const JAR_GROUND_HEIGHT = 20
@@ -133,16 +150,73 @@ function getLocalDateKey(d = new Date()) {
 
 function attemptFromPeekPayload(peekData: {
   completedAttempts?: unknown
+  attemptsUsed?: unknown
   limitReached?: unknown
 }): number {
   const completed = Math.min(
     GAME.maxAttempts,
     Number(peekData?.completedAttempts ?? 0)
   )
+  const quota = Math.min(
+    GAME.maxAttempts,
+    Number(peekData?.attemptsUsed ?? 0)
+  )
   const limitReached =
-    peekData?.limitReached === true || completed >= GAME.maxAttempts
+    peekData?.limitReached === true ||
+    completed >= GAME.maxAttempts ||
+    quota >= GAME.maxAttempts
   if (limitReached) return GAME.maxAttempts + 1
-  return Math.min(GAME.maxAttempts + 1, completed + 1)
+  /** Next round: at least one more than finished rows; quota reflects reserved DROPs (can be ahead if submit failed). */
+  const slot = Math.max(completed + 1, quota)
+  return Math.min(GAME.maxAttempts + 1, slot)
+}
+
+const OFFLINE_DAILY_KEY = "orbifall_offline_daily_v1:"
+
+type OfflineDaily = { r: number; c: number }
+
+/** When quota/peek APIs fail (500/503), still advance rounds in-session so localhost is playable. */
+function readOfflineDaily(day: string): OfflineDaily {
+  if (typeof window === "undefined") return { r: 0, c: 0 }
+  try {
+    const raw = sessionStorage.getItem(OFFLINE_DAILY_KEY + day)
+    if (!raw) return { r: 0, c: 0 }
+    const j = JSON.parse(raw) as Partial<OfflineDaily>
+    return {
+      r: Math.min(GAME.maxAttempts, Math.max(0, Number(j.r) || 0)),
+      c: Math.min(GAME.maxAttempts, Math.max(0, Number(j.c) || 0))
+    }
+  } catch {
+    return { r: 0, c: 0 }
+  }
+}
+
+function writeOfflineDaily(day: string, st: OfflineDaily) {
+  if (typeof window === "undefined") return
+  try {
+    sessionStorage.setItem(
+      OFFLINE_DAILY_KEY + day,
+      JSON.stringify({
+        r: Math.min(GAME.maxAttempts, Math.max(0, st.r)),
+        c: Math.min(GAME.maxAttempts, Math.max(0, st.c))
+      })
+    )
+  } catch {}
+}
+
+function clearOfflineDaily(day: string) {
+  if (typeof window === "undefined") return
+  try {
+    sessionStorage.removeItem(OFFLINE_DAILY_KEY + day)
+  } catch {}
+}
+
+/** r = DROPs reserved offline; c = rounds finished offline. */
+function attemptFromOfflineState(st: OfflineDaily): number {
+  const { r, c } = st
+  if (c >= GAME.maxAttempts) return GAME.maxAttempts + 1
+  const slot = c >= r ? Math.min(GAME.maxAttempts + 1, c + 1) : r
+  return Math.min(GAME.maxAttempts + 1, Math.max(1, slot))
 }
 
 function getDiffDaysSinceStart(today = new Date()) {
@@ -322,8 +396,8 @@ export default function GameCanvas() {
   // Compact sizing for phones (keeps the layout balanced without scrolling).
   const isCompact = isSmallScreen
 
-  // Supabase is configured via .env.local. Even if env values aren't exposed to the client,
-  // the API routes may still work; we'll attempt Supabase syncing and gracefully fall back.
+  // Daily quota + submits go through /api/* → Supabase (same on localhost and production).
+  // If those routes error (500/503), play still works and sessionStorage keeps round progress for the day.
   const supabaseEnabled = true
 
   const [soundEnabled, setSoundEnabled] = useState(() => {
@@ -345,12 +419,31 @@ export default function GameCanvas() {
   const diffValueRef = useRef<HTMLDivElement | null>(null)
 
   const audioCtxRef = useRef<AudioContext | null>(null)
-  const lastBounceAtRef = useRef<number>(0)
+  const uiBusRef = useRef<GainNode | null>(null)
+  const physicsBusRef = useRef<GainNode | null>(null)
+  const stopClickUntilRef = useRef<number>(0)
+  const bounceHitTimesRef = useRef<number[]>([])
+  /** Matter collision handler keeps a stable ref so throttling / volumes stay current. */
+  const playBounceSoundRef = useRef<(impact01: number) => void>(() => {})
   const lastHapticAtRef = useRef<number>(0)
   const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const actionButtonPressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const consumeAttemptInFlightRef = useRef(false)
+  /** Avoid double-applying end-of-day local stats when deps re-fire (e.g. Strict Mode). */
+  const appliedEndOfDayStatsRef = useRef(false)
+
+  const ensureAudioBuses = (ctx: AudioContext) => {
+    if (uiBusRef.current && physicsBusRef.current) return
+    const ui = ctx.createGain()
+    const phys = ctx.createGain()
+    ui.gain.value = AUDIO.UI_BUS
+    phys.gain.value = AUDIO.PHYSICS_BUS
+    ui.connect(ctx.destination)
+    phys.connect(ctx.destination)
+    uiBusRef.current = ui
+    physicsBusRef.current = phys
+  }
 
   const withAudioContext = (fn: (ctx: AudioContext) => void) => {
     if (typeof window === "undefined") return
@@ -365,12 +458,17 @@ export default function GameCanvas() {
     const ctx = audioCtxRef.current
     if (!ctx) return
 
+    const run = () => {
+      ensureAudioBuses(ctx)
+      fn(ctx)
+    }
+
     if (ctx.state === "suspended") {
-      ctx.resume().then(() => fn(ctx)).catch(() => {})
+      ctx.resume().then(run).catch(() => {})
       return
     }
 
-    fn(ctx)
+    run()
   }
 
   useEffect(() => {
@@ -434,98 +532,137 @@ export default function GameCanvas() {
         divider: "rgba(0,0,0,0.06)"
       }
 
-  const playClickSound = () => {
+  /** START / DROP — UI layer: muted chirp, ±5% pitch. */
+  const playStartSound = () => {
     withAudioContext(ctx => {
+      const ui = uiBusRef.current
+      if (!ui) return
       const now = ctx.currentTime
+      const pitchMul = 0.95 + Math.random() * 0.1
+      const f0 = 440 * pitchMul
+      const f1 = 560 * pitchMul
+
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
-
       osc.type = "triangle"
-      osc.frequency.setValueAtTime(560, now)
-      osc.frequency.exponentialRampToValueAtTime(440, now + 0.04)
+      osc.frequency.setValueAtTime(f0, now)
+      osc.frequency.exponentialRampToValueAtTime(Math.max(80, f1), now + 0.026)
+      osc.frequency.exponentialRampToValueAtTime(Math.max(60, 400 * pitchMul), now + 0.062)
 
+      const peak = AUDIO.START_PEAK
       gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(Math.min(0.12, 0.05 * SFX_GAIN_MUL), now + 0.01)
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06)
+      gain.gain.exponentialRampToValueAtTime(peak, now + 0.012)
+      gain.gain.exponentialRampToValueAtTime(peak * 0.48, now + 0.034)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + AUDIO.START_MS)
 
       osc.connect(gain)
-      gain.connect(ctx.destination)
+      gain.connect(ui)
       osc.start(now)
-      osc.stop(now + 0.07)
+      osc.stop(now + AUDIO.START_MS + 0.01)
     })
   }
 
-  const playStopImpactSound = () => {
-    // A soft, short "thump" to make STOP feel impactful.
+  /**
+   * STOP — UI layer: low, soft “breath”; no stacking.
+   */
+  const playStopClickSound = () => {
     withAudioContext(ctx => {
+      const ui = uiBusRef.current
+      if (!ui) return
       const now = ctx.currentTime
+      if (now < stopClickUntilRef.current) return
+      stopClickUntilRef.current = now + AUDIO.STOP_CLICK_MS + 0.03
+
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
-
       osc.type = "sine"
-      osc.frequency.setValueAtTime(260, now)
-      osc.frequency.exponentialRampToValueAtTime(180, now + 0.05)
+      const fHi = 285 + Math.random() * 20
+      const fLo = 210 + Math.random() * 14
+      osc.frequency.setValueAtTime(fHi, now)
+      osc.frequency.exponentialRampToValueAtTime(Math.max(110, fLo), now + AUDIO.STOP_CLICK_MS * 0.92)
 
+      const peak = AUDIO.STOP_CLICK_PEAK
       gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(Math.min(0.12, 0.045 * SFX_GAIN_MUL), now + 0.01)
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09)
+      gain.gain.exponentialRampToValueAtTime(peak, now + 0.038)
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak * 0.2), now + 0.095)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + AUDIO.STOP_CLICK_MS)
 
       osc.connect(gain)
-      gain.connect(ctx.destination)
+      gain.connect(ui)
       osc.start(now)
-      osc.stop(now + 0.10)
+      osc.stop(now + AUDIO.STOP_CLICK_MS + 0.012)
     })
   }
 
-  const playBounceSound = () => {
-    const nowMs = performance.now()
-    if (nowMs - lastBounceAtRef.current < 70) return
+  /**
+   * Ball collision — physics bus: subtle, throttled (max/sec), pitch & gain jitter, impact-scaled.
+   */
+  const playBounceSound = (impact01: number) => {
     if (!soundEnabledRef.current) return
-    lastBounceAtRef.current = nowMs
+    if (impact01 < 0.12) return
+
+    const tMs = performance.now()
+    const win = bounceHitTimesRef.current
+    while (win.length && tMs - win[0] > 1000) win.shift()
+    if (win.length >= AUDIO.BOUNCE_MAX_PER_SEC) return
+    win.push(tMs)
 
     withAudioContext(ctx => {
+      const bus = physicsBusRef.current
+      if (!bus) return
       const now = ctx.currentTime
+      const pitchMul = 0.95 + Math.random() * 0.1
+      const volMul = 0.88 + Math.random() * 0.12
+      const base = (195 + Math.random() * 95) * pitchMul
+
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
-
       osc.type = "sine"
-      const base = 180 + Math.random() * 120
       osc.frequency.setValueAtTime(base, now)
-      osc.frequency.exponentialRampToValueAtTime(base * 0.7, now + 0.03)
+      osc.frequency.exponentialRampToValueAtTime(base * 0.68, now + AUDIO.BOUNCE_MS * 0.75)
 
+      const peak = Math.min(
+        AUDIO.BOUNCE_PEAK_MAX,
+        AUDIO.BOUNCE_PEAK_MAX * (0.35 + 0.65 * impact01) * volMul
+      )
       gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(Math.min(0.1, 0.035 * SFX_GAIN_MUL), now + 0.005)
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.04)
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), now + 0.003)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + AUDIO.BOUNCE_MS)
 
       osc.connect(gain)
-      gain.connect(ctx.destination)
+      gain.connect(bus)
       osc.start(now)
-      osc.stop(now + 0.045)
+      osc.stop(now + AUDIO.BOUNCE_MS + 0.008)
     })
   }
 
+  playBounceSoundRef.current = playBounceSound
+
+  /** Result sting — UI layer, slightly softer than before */
   const playSuccessSound = () => {
     withAudioContext(ctx => {
+      const ui = uiBusRef.current
+      if (!ui) return
       const now = ctx.currentTime
+      const pitchMul = 0.97 + Math.random() * 0.06
+      const freqs = [660 * pitchMul, 880 * pitchMul, 990 * pitchMul]
+      const notePeak = 0.052
 
-      const freqs = [660, 880, 990]
       freqs.forEach((f, i) => {
         const osc = ctx.createOscillator()
         const gain = ctx.createGain()
         osc.type = "triangle"
         osc.frequency.setValueAtTime(f, now + i * 0.06)
 
-        gain.gain.setValueAtTime(0.0001, now + i * 0.06)
-        gain.gain.exponentialRampToValueAtTime(
-          Math.min(0.11, 0.06 * SFX_GAIN_MUL),
-          now + i * 0.06 + 0.01
-        )
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.06 + 0.12)
+        const t0 = now + i * 0.06
+        gain.gain.setValueAtTime(0.0001, t0)
+        gain.gain.exponentialRampToValueAtTime(notePeak, t0 + 0.01)
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12)
 
         osc.connect(gain)
-        gain.connect(ctx.destination)
-        osc.start(now + i * 0.06)
-        osc.stop(now + i * 0.06 + 0.14)
+        gain.connect(ui)
+        osc.start(t0)
+        osc.stop(t0 + 0.14)
       })
     })
   }
@@ -645,8 +782,12 @@ export default function GameCanvas() {
 
         if (statsData?.stats) setStats(statsData.stats as Stats)
 
-        if (!peekRes.ok) return
+        if (!peekRes.ok) {
+          setAttempt(attemptFromOfflineState(readOfflineDaily(todayKey)))
+          return
+        }
 
+        clearOfflineDaily(todayKey)
         setAttempt(attemptFromPeekPayload(peekData))
       } catch {
         // ignore
@@ -673,27 +814,41 @@ export default function GameCanvas() {
     prevGameOverRef.current = next
   }, [gameOver])
 
+  // When the day is finished (3 results + game over), bump local all-time stats from session data.
+  // Uses attemptResults so we still update if bestDiff/submit races or the server returns stale zeros.
   useEffect(() => {
-    if (!gameOver || bestDiff === null) return
+    if (!gameOver) {
+      appliedEndOfDayStatsRef.current = false
+      return
+    }
+    if (appliedEndOfDayStatsRef.current) return
+    if (attemptResults.length < GAME.maxAttempts) return
 
-    const diff = bestDiff
+    appliedEndOfDayStatsRef.current = true
+
+    const sessionBest = Math.min(...attemptResults)
     const today = getLocalDateKey()
 
     setStats(prev => {
       const newStats: Stats = {
         played: prev.played + 1,
-        best: prev.best === null ? diff : Math.min(prev.best, diff),
-        totalDiff: prev.totalDiff + diff,
+        best: prev.best === null ? sessionBest : Math.min(prev.best, sessionBest),
+        totalDiff: prev.totalDiff + sessionBest,
         streak: prev.streak + 1,
         maxStreak: Math.max(prev.maxStreak, prev.streak + 1),
         lastPlayed: today,
         earthCollected: prev.earthCollected
       }
-
-      localStorage.setItem("orbifallStats", JSON.stringify(newStats))
+      try {
+        localStorage.setItem("orbifallStats", JSON.stringify(newStats))
+      } catch {
+        // ignore
+      }
       return newStats
     })
-  }, [gameOver, bestDiff])
+
+    setBestDiff(prev => (prev === null ? sessionBest : Math.min(prev, sessionBest)))
+  }, [gameOver, attemptResults])
 
   useEffect(() => {
     if (
@@ -859,14 +1014,19 @@ export default function GameCanvas() {
         const { x: vx, y: vy } = dynamic.velocity
         const speedSq = vx * vx + vy * vy
         if (speedSq < 2.56) continue
+        const speed = Math.sqrt(speedSq)
         const collision = pair.collision
+        let approach = speed * 0.35
         if (collision?.normal) {
           const nx = collision.normal.x
           const ny = collision.normal.y
-          const approach = Math.abs(vx * nx + vy * ny)
+          approach = Math.abs(vx * nx + vy * ny)
           if (approach < 0.85 && speedSq < 12) continue
+        } else if (speedSq < 12) {
+          continue
         }
-        playBounceSound()
+        const impact01 = Math.min(1, approach * 0.22 + speed * 0.045)
+        playBounceSoundRef.current(impact01)
         break
       }
     }
@@ -1170,16 +1330,27 @@ useEffect(() => {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
         const quotaApiServerError = res.status >= 500 && res.status < 600
+        if (quotaApiServerError) {
+          const st = readOfflineDaily(todayKey)
+          const r2 = Math.min(GAME.maxAttempts, st.r + 1)
+          writeOfflineDaily(todayKey, { ...st, r: r2 })
+          setAttempt(Math.min(GAME.maxAttempts, Math.max(1, r2)))
+        }
         okToStart = quotaApiServerError
       } else if (data?.limitReached === true) {
         setAttempt(GAME.maxAttempts + 1)
         okToStart = false
       } else {
+        clearOfflineDaily(todayKey)
         const used = Number(data?.attemptsUsed ?? 0)
         setAttempt(Math.min(GAME.maxAttempts, Math.max(1, used)))
         okToStart = true
       }
     } catch {
+      const st = readOfflineDaily(todayKey)
+      const r2 = Math.min(GAME.maxAttempts, st.r + 1)
+      writeOfflineDaily(todayKey, { ...st, r: r2 })
+      setAttempt(Math.min(GAME.maxAttempts, Math.max(1, r2)))
       okToStart = true
     } finally {
       consumeAttemptInFlightRef.current = false
@@ -1192,7 +1363,7 @@ useEffect(() => {
     setDropImpact(true)
     setTimeout(() => setDropImpact(false), 320)
 
-    playClickSound()
+    playStartSound()
     triggerHaptic("press") // fallback for keyboard
     setGameFinished(false)
     setStopDiff(null)
@@ -1287,7 +1458,13 @@ useEffect(() => {
         target
       })
     })
-      .then(r => r.json())
+      .then(async r => {
+        try {
+          return await r.json()
+        } catch {
+          return null
+        }
+      })
       .catch(() => null)
 
     setStopDiff(diff)
@@ -1298,7 +1475,7 @@ useEffect(() => {
     else if (diff <= 3) triggerHaptic("near")
     else triggerHaptic("stop")
 
-    playStopImpactSound()
+    playStopClickSound()
 
     // Smooth slow-down -> settle -> reveal
     const rampDownMs = 175 // 150-250ms target
@@ -1370,49 +1547,86 @@ useEffect(() => {
 
       // Persist this attempt + sync rounds from server (peek is source of truth for UI).
       submitAttemptPromise?.then(async (data: any) => {
-        if (!data) return
-        if (data?.ok) {
-          const completed = Number(data.attemptsUsed ?? 0)
-          const nextSlot = Math.min(GAME.maxAttempts + 1, completed + 1)
-          setAttempt(nextSlot)
-          if (nextSlot > GAME.maxAttempts) setGlassCountdownBlocked(true)
-
-          if (typeof data.bestDiff === "number") {
-            setBestDiff(data.bestDiff)
-          }
-
-          if (data.isDayComplete) {
-            fetch(`/api/player-stats`, { credentials: "include" })
-              .then(r => r.json())
-              .then(statsRes => {
-                if (statsRes?.stats) {
-                  setStats(prev => {
-                    const serverStats = statsRes.stats as Stats
-                    return {
-                      ...serverStats,
-                      earthCollected: Math.max(prev.earthCollected, serverStats.earthCollected ?? 0)
-                    }
-                  })
-                }
-              })
-              .catch(() => {})
-          }
-        } else if (typeof data.attemptsUsed === "number") {
-          const completed = Number(data.attemptsUsed)
-          setAttempt(Math.min(GAME.maxAttempts + 1, completed + 1))
-        }
-
         try {
-          const peekRes = await fetch(
-            `/api/daily-attempts?date=${encodeURIComponent(todayKey)}&peek=true`,
-            { credentials: "include" }
-          )
-          if (peekRes.ok) {
-            const peekData = await peekRes.json()
-            setAttempt(attemptFromPeekPayload(peekData))
+          if (data?.ok) {
+            const completed = Number(data.attemptsUsed ?? 0)
+            const nextSlot = Math.min(GAME.maxAttempts + 1, completed + 1)
+            setAttempt(nextSlot)
+            if (nextSlot > GAME.maxAttempts) setGlassCountdownBlocked(true)
+
+            if (typeof data.bestDiff === "number") {
+              setBestDiff(prev =>
+                prev === null ? data.bestDiff : Math.min(prev, data.bestDiff as number)
+              )
+            }
+
+            if (data.isDayComplete) {
+              fetch(`/api/player-stats`, { credentials: "include" })
+                .then(r => r.json())
+                .then(statsRes => {
+                  if (statsRes?.stats) {
+                    setStats(prev => {
+                      const s = statsRes.stats as Stats
+                      const sp = s.played ?? 0
+                      // Server can lag or fail to persist — never wipe a higher local count.
+                      if (sp < prev.played) {
+                        return {
+                          ...prev,
+                          earthCollected: Math.max(prev.earthCollected, s.earthCollected ?? 0)
+                        }
+                      }
+                      return {
+                        ...s,
+                        earthCollected: Math.max(prev.earthCollected, s.earthCollected ?? 0)
+                      }
+                    })
+                  }
+                })
+                .catch(() => {})
+            }
+          } else if (data && typeof data.attemptsUsed === "number") {
+            const completed = Number(data.attemptsUsed)
+            setAttempt(Math.min(GAME.maxAttempts + 1, completed + 1))
           }
-        } catch {
-          // ignore
+        } finally {
+          // Always re-fetch peek (even when submit body was empty / JSON parse failed) so rounds advance.
+          try {
+            const peekRes = await fetch(
+              `/api/daily-attempts?date=${encodeURIComponent(todayKey)}&peek=true`,
+              { credentials: "include" }
+            )
+            if (peekRes.ok) {
+              clearOfflineDaily(todayKey)
+              const peekData = await peekRes.json()
+              const next = attemptFromPeekPayload(peekData)
+              setAttempt(next)
+              if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
+            } else if (
+              !data?.ok &&
+              !(data && typeof data.attemptsUsed === "number")
+            ) {
+              const st = readOfflineDaily(todayKey)
+              const c2 = Math.min(GAME.maxAttempts, st.c + 1)
+              const nextSt = { ...st, c: c2 }
+              writeOfflineDaily(todayKey, nextSt)
+              const next = attemptFromOfflineState(nextSt)
+              setAttempt(next)
+              if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
+            }
+          } catch {
+            if (
+              !data?.ok &&
+              !(data && typeof data.attemptsUsed === "number")
+            ) {
+              const st = readOfflineDaily(todayKey)
+              const c2 = Math.min(GAME.maxAttempts, st.c + 1)
+              const nextSt = { ...st, c: c2 }
+              writeOfflineDaily(todayKey, nextSt)
+              const next = attemptFromOfflineState(nextSt)
+              setAttempt(next)
+              if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
+            }
+          }
         }
       })
 
@@ -1729,6 +1943,12 @@ useEffect(() => {
 
   let percentile: number | null = null
 
+  const statsModalBestDiff =
+    bestDiff ??
+    (gameOver && attemptResults.length >= GAME.maxAttempts
+      ? Math.min(...attemptResults)
+      : null)
+
   const avgDiffNum = stats.played > 0 ? stats.totalDiff / stats.played : null
   const averageDiff = avgDiffNum !== null ? avgDiffNum.toFixed(1) : "-"
 
@@ -1740,13 +1960,10 @@ useEffect(() => {
     return { color: "#e63946", emoji: "🎯", label: "Keep pushing" }
   })()
 
-if (bestDiff !== null) {
-
-  const score = 100 - bestDiff * 4
-
-  percentile = Math.max(1, Math.min(99, Math.round(score)))
-
-}
+  if (statsModalBestDiff !== null) {
+    const score = 100 - statsModalBestDiff * 4
+    percentile = Math.max(1, Math.min(99, Math.round(score)))
+  }
 
   useEffect(() => {
 
@@ -2059,15 +2276,17 @@ const revealStyle = gameFinished
               <span aria-hidden className="shrink-0 text-[0.95em] leading-none opacity-90">
                 🎯
               </span>
-              <span
-                className={
-                  "shrink-0 text-[0.72em] font-semibold leading-none " +
-                  (darkMode ? "text-neutral-400" : "text-neutral-500")
-                }
-              >
-                Target
+              <span className="flex min-w-0 shrink-0 items-baseline gap-2">
+                <span
+                  className={
+                    "text-[0.72em] font-semibold leading-none " +
+                    (darkMode ? "text-neutral-400" : "text-neutral-500")
+                  }
+                >
+                  Target
+                </span>
+                <span className="tabular-nums leading-none">{target}</span>
               </span>
-              <span className="tabular-nums">{target}</span>
             </div>
 
             {/* Secondary: rounds — minimal gap under target */}
@@ -2092,14 +2311,14 @@ const revealStyle = gameFinished
                         (showLivePulse ? "orbifall-attempt--live " : "") +
                         "flex size-[15px] shrink-0 items-center justify-center rounded-full border text-[7px] font-semibold transition-all duration-150 sm:size-4 sm:text-[8px] " +
                         (done
-                          ? "border-transparent bg-[#2a9d8f] text-white"
+                          ? "border-transparent bg-[#2a9d8f] text-white shadow-sm"
                           : active
                           ? darkMode
-                            ? "border-teal-400/45 bg-neutral-700/90 text-neutral-100"
-                            : "border-teal-600/35 bg-neutral-100 text-neutral-800"
+                            ? "border-teal-400/70 bg-teal-950/45 text-teal-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] ring-1 ring-teal-400/25"
+                            : "border-teal-600/70 bg-teal-50 text-teal-900 shadow-sm ring-1 ring-teal-600/20"
                           : darkMode
-                          ? "border-white/[0.07] bg-neutral-800/60 text-neutral-500"
-                          : "border-black/[0.06] bg-neutral-100/90 text-neutral-400") +
+                          ? "border-white/10 bg-neutral-900/50 text-neutral-500"
+                          : "border-neutral-200/90 bg-white/80 text-neutral-400") +
                         (active && !done && !showLivePulse ? " scale-105" : " scale-100")
                       }
                     >
@@ -2745,7 +2964,8 @@ const revealStyle = gameFinished
 
             <h2 style={{marginTop:"4px", color: theme.modalText}}>🎉 Game finished!</h2>
              <p style={{marginTop:"10px", color: theme.modalText}}>
-              ⭐Best diff: <b>{bestDiff}</b>
+              ⭐Best diff:{" "}
+              <b>{statsModalBestDiff !== null ? statsModalBestDiff : "–"}</b>
             </p>
             {percentile && (
               <p style={{ color: theme.modalText }}>

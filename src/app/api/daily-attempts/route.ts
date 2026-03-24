@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
-import { createClient, SupabaseClient } from "@supabase/supabase-js"
+import { createClient, SupabaseClient, type PostgrestError } from "@supabase/supabase-js"
 import {
   ORBIFALL_PLAYER_COOKIE,
   applyOrbifallPlayerCookie,
@@ -22,7 +22,7 @@ async function countCompletedAttempts(
   supabase: SupabaseClient,
   playerId: string,
   day: string
-): Promise<{ completed: number; error: Error | null }> {
+): Promise<{ completed: number; error: PostgrestError | null }> {
   const { count, error } = await supabase
     .from(DAILY_ATTEMPTS_TABLE)
     .select("id", { count: "exact", head: true })
@@ -30,7 +30,7 @@ async function countCompletedAttempts(
     .eq("day", day)
 
   if (error) {
-    return { completed: 0, error: new Error(error.message) }
+    return { completed: 0, error }
   }
   return { completed: Math.min(MAX_ATTEMPTS, count ?? 0), error: null }
 }
@@ -90,7 +90,13 @@ export async function GET(req: Request) {
 
     if (selErr) {
       const res = NextResponse.json(
-        { attemptsUsed: 0, completedAttempts: 0, limitReached: false },
+        {
+          attemptsUsed: 0,
+          completedAttempts: 0,
+          limitReached: false,
+          error: selErr.message,
+          code: selErr.code
+        },
         { status: 500 }
       )
       return applyOrbifallPlayerCookie(res, playerId, isNew)
@@ -101,7 +107,13 @@ export async function GET(req: Request) {
 
     if (countErr) {
       const res = NextResponse.json(
-        { attemptsUsed: quota, completedAttempts: 0, limitReached: quota >= MAX_ATTEMPTS },
+        {
+          attemptsUsed: quota,
+          completedAttempts: 0,
+          limitReached: quota >= MAX_ATTEMPTS,
+          error: countErr.message,
+          code: countErr.code
+        },
         { status: 500 }
       )
       return applyOrbifallPlayerCookie(res, playerId, isNew)
@@ -155,7 +167,15 @@ export async function POST(req: Request) {
         .maybeSingle()
 
       if (selErr) {
-        const res = NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 500 })
+        const res = NextResponse.json(
+          {
+            attemptsUsed: 0,
+            limitReached: false,
+            error: selErr.message,
+            code: selErr.code
+          },
+          { status: 500 }
+        )
         return applyOrbifallPlayerCookie(res, playerId, isNew)
       }
 
@@ -188,7 +208,15 @@ export async function POST(req: Request) {
           continue
         }
 
-        const res = NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 500 })
+        const res = NextResponse.json(
+          {
+            attemptsUsed: 0,
+            limitReached: false,
+            error: insErr.message,
+            code: insErr.code
+          },
+          { status: 500 }
+        )
         return applyOrbifallPlayerCookie(res, playerId, isNew)
       }
 
@@ -205,7 +233,15 @@ export async function POST(req: Request) {
         .maybeSingle()
 
       if (upErr) {
-        const res = NextResponse.json({ attemptsUsed: 0, limitReached: false }, { status: 500 })
+        const res = NextResponse.json(
+          {
+            attemptsUsed: 0,
+            limitReached: false,
+            error: upErr.message,
+            code: upErr.code
+          },
+          { status: 500 }
+        )
         return applyOrbifallPlayerCookie(res, playerId, isNew)
       }
 
