@@ -123,6 +123,28 @@ function getISODate(date = new Date()) {
   return date.toISOString().split("T")[0]
 }
 
+/** Local calendar YYYY-MM-DD — use for daily quota APIs (UTC ISO date was wrong for many timezones). */
+function getLocalDateKey(d = new Date()) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+function attemptFromPeekPayload(peekData: {
+  completedAttempts?: unknown
+  limitReached?: unknown
+}): number {
+  const completed = Math.min(
+    GAME.maxAttempts,
+    Number(peekData?.completedAttempts ?? 0)
+  )
+  const limitReached =
+    peekData?.limitReached === true || completed >= GAME.maxAttempts
+  if (limitReached) return GAME.maxAttempts + 1
+  return Math.min(GAME.maxAttempts + 1, completed + 1)
+}
+
 function getDiffDaysSinceStart(today = new Date()) {
   const start = new Date(GAME.startDate)
   return Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
@@ -554,7 +576,7 @@ export default function GameCanvas() {
     }
   }
 
-  const todayKey = getISODate()
+  const todayKey = getLocalDateKey()
   const [isEarthDropPlayerToday, setIsEarthDropPlayerToday] = useState(false)
   const earthKey = `${EARTH_DROP_KEY_PREFIX}${todayKey}`
   const earthCollectedToday = getStorageItem(earthKey) === "true"
@@ -625,17 +647,7 @@ export default function GameCanvas() {
 
         if (!peekRes.ok) return
 
-        const completed = Math.min(
-          GAME.maxAttempts,
-          Number(peekData?.completedAttempts ?? 0)
-        )
-        const limitReached = peekData?.limitReached === true || completed >= GAME.maxAttempts
-
-        if (limitReached) {
-          setAttempt(GAME.maxAttempts + 1)
-        } else {
-          setAttempt(Math.min(GAME.maxAttempts + 1, completed + 1))
-        }
+        setAttempt(attemptFromPeekPayload(peekData))
       } catch {
         // ignore
       }
@@ -665,7 +677,7 @@ export default function GameCanvas() {
     if (!gameOver || bestDiff === null) return
 
     const diff = bestDiff
-    const today = getISODate()
+    const today = getLocalDateKey()
 
     setStats(prev => {
       const newStats: Stats = {
@@ -1356,8 +1368,8 @@ useEffect(() => {
       setAttemptResults(prev => [...prev, diff])
       setBestDiff(prev => (prev === null ? diff : Math.min(prev, diff)))
 
-      // Persist this attempt + sync attempt index from server (single source of truth).
-      submitAttemptPromise?.then((data: any) => {
+      // Persist this attempt + sync rounds from server (peek is source of truth for UI).
+      submitAttemptPromise?.then(async (data: any) => {
         if (!data) return
         if (data?.ok) {
           const completed = Number(data.attemptsUsed ?? 0)
@@ -1388,6 +1400,19 @@ useEffect(() => {
         } else if (typeof data.attemptsUsed === "number") {
           const completed = Number(data.attemptsUsed)
           setAttempt(Math.min(GAME.maxAttempts + 1, completed + 1))
+        }
+
+        try {
+          const peekRes = await fetch(
+            `/api/daily-attempts?date=${encodeURIComponent(todayKey)}&peek=true`,
+            { credentials: "include" }
+          )
+          if (peekRes.ok) {
+            const peekData = await peekRes.json()
+            setAttempt(attemptFromPeekPayload(peekData))
+          }
+        } catch {
+          // ignore
         }
       })
 
