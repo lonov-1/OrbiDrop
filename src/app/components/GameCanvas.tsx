@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import * as Matter from "matter-js"
 
@@ -275,6 +275,77 @@ function attemptFromOfflineState(st: OfflineDaily): number {
   if (c >= GAME.maxAttempts) return GAME.maxAttempts + 1
   const slot = c >= r ? Math.min(GAME.maxAttempts + 1, c + 1) : r
   return Math.min(GAME.maxAttempts + 1, Math.max(1, slot))
+}
+
+/** Survives tab close (unlike sessionStorage). Same device + calendar day = same quota snapshot. */
+const ORBIFALL_DAILY_PROGRESS_KEY = "orbifall_daily_progress_v1:"
+
+type DailyProgressStored = { c: number; r: number; exhausted: boolean }
+
+function readDailyProgressStored(day: string): DailyProgressStored | null {
+  const raw = getStorageItem(ORBIFALL_DAILY_PROGRESS_KEY + day)
+  if (!raw) return null
+  try {
+    const j = JSON.parse(raw) as Partial<DailyProgressStored>
+    return {
+      c: Math.min(GAME.maxAttempts, Math.max(0, Number(j.c) || 0)),
+      r: Math.min(GAME.maxAttempts, Math.max(0, Number(j.r) || 0)),
+      exhausted: j.exhausted === true
+    }
+  } catch {
+    return null
+  }
+}
+
+function writeDailyProgressStored(day: string, st: DailyProgressStored) {
+  setStorageItem(
+    ORBIFALL_DAILY_PROGRESS_KEY + day,
+    JSON.stringify({
+      c: Math.min(GAME.maxAttempts, Math.max(0, st.c)),
+      r: Math.min(GAME.maxAttempts, Math.max(0, st.r)),
+      exhausted: st.exhausted === true
+    })
+  )
+}
+
+type PeekLike = {
+  completedAttempts?: unknown
+  attemptsUsed?: unknown
+  limitReached?: unknown
+}
+
+/** Union device-local snapshot with server peek (take max so we never grant extra plays). */
+function mergeStoredDailyWithPeek(
+  stored: DailyProgressStored | null,
+  peek: PeekLike
+): { completedAttempts: number; attemptsUsed: number; limitReached: boolean } {
+  const pc = Math.min(GAME.maxAttempts, Math.max(0, Number(peek.completedAttempts ?? 0)))
+  const pr = Math.min(GAME.maxAttempts, Math.max(0, Number(peek.attemptsUsed ?? 0)))
+  const pLimit =
+    peek.limitReached === true || pc >= GAME.maxAttempts || pr >= GAME.maxAttempts
+  if (!stored) {
+    return {
+      completedAttempts: pc,
+      attemptsUsed: pr,
+      limitReached: pLimit
+    }
+  }
+  const c = Math.max(stored.c, pc)
+  const r = Math.max(stored.r, pr)
+  const limitReached =
+    stored.exhausted || pLimit || c >= GAME.maxAttempts || r >= GAME.maxAttempts
+  return { completedAttempts: c, attemptsUsed: r, limitReached }
+}
+
+function persistMergedDailyProgress(
+  day: string,
+  merged: ReturnType<typeof mergeStoredDailyWithPeek>
+) {
+  writeDailyProgressStored(day, {
+    c: merged.completedAttempts,
+    r: merged.attemptsUsed,
+    exhausted: merged.limitReached
+  })
 }
 
 function getDiffDaysSinceStart(today = new Date()) {
@@ -826,6 +897,23 @@ export default function GameCanvas() {
     )
   })
 
+  // Before paint: restore today’s attempt slot from localStorage (survives tab close).
+  useLayoutEffect(() => {
+    const stored = readDailyProgressStored(todayKey)
+    if (!stored) return
+    if (stored.c === 0 && stored.r === 0 && !stored.exhausted) return
+    setAttempt(
+      attemptFromPeekPayload({
+        completedAttempts: stored.c,
+        attemptsUsed: stored.r,
+        limitReached:
+          stored.exhausted ||
+          stored.c >= GAME.maxAttempts ||
+          stored.r >= GAME.maxAttempts
+      })
+    )
+  }, [todayKey])
+
   // All-time stats (player-stats) + today's quota/completions (peek — does not consume attempts).
   useEffect(() => {
     const run = async () => {
@@ -853,14 +941,34 @@ export default function GameCanvas() {
         }
 
         if (!peekRes.ok) {
-          setAttempt(attemptFromOfflineState(readOfflineDaily(todayKey)))
+          const stored = readDailyProgressStored(todayKey)
+          const offline = readOfflineDaily(todayKey)
+          const merged = mergeStoredDailyWithPeek(stored, {
+            completedAttempts: offline.c,
+            attemptsUsed: offline.r,
+            limitReached:
+              offline.c >= GAME.maxAttempts || offline.r >= GAME.maxAttempts
+          })
+          persistMergedDailyProgress(todayKey, merged)
+          setAttempt(attemptFromPeekPayload(merged))
           return
         }
 
         clearOfflineDaily(todayKey)
-        setAttempt(attemptFromPeekPayload(peekData))
+        const stored = readDailyProgressStored(todayKey)
+        const merged = mergeStoredDailyWithPeek(stored, peekData)
+        persistMergedDailyProgress(todayKey, merged)
+        setAttempt(attemptFromPeekPayload(merged))
       } catch {
-        // ignore
+        const stored = readDailyProgressStored(todayKey)
+        if (stored) {
+          const merged = mergeStoredDailyWithPeek(stored, {
+            completedAttempts: 0,
+            attemptsUsed: 0,
+            limitReached: stored.exhausted
+          })
+          setAttempt(attemptFromPeekPayload(merged))
+        }
       }
     }
 
@@ -914,6 +1022,12 @@ export default function GameCanvas() {
     })
 
     setBestDiff(prev => (prev === null ? sessionBest : Math.min(prev, sessionBest)))
+
+    persistMergedDailyProgress(today, {
+      completedAttempts: GAME.maxAttempts,
+      attemptsUsed: GAME.maxAttempts,
+      limitReached: true
+    })
   }, [gameOver, attemptResults])
 
   useEffect(() => {
@@ -1384,15 +1498,39 @@ export default function GameCanvas() {
           const r2 = Math.min(GAME.maxAttempts, st.r + 1)
           writeOfflineDaily(todayKey, { ...st, r: r2 })
           setAttempt(Math.min(GAME.maxAttempts, Math.max(1, r2)))
+          const merged = mergeStoredDailyWithPeek(readDailyProgressStored(todayKey), {
+            completedAttempts: st.c,
+            attemptsUsed: r2,
+            limitReached:
+              st.c >= GAME.maxAttempts || r2 >= GAME.maxAttempts
+          })
+          persistMergedDailyProgress(todayKey, merged)
         }
         okToStart = quotaApiServerError
       } else if (data?.limitReached === true) {
         setAttempt(GAME.maxAttempts + 1)
+        persistMergedDailyProgress(
+          todayKey,
+          mergeStoredDailyWithPeek(readDailyProgressStored(todayKey), {
+            completedAttempts: GAME.maxAttempts,
+            attemptsUsed: GAME.maxAttempts,
+            limitReached: true
+          })
+        )
         okToStart = false
       } else {
         clearOfflineDaily(todayKey)
         const used = Number(data?.attemptsUsed ?? 0)
         setAttempt(Math.min(GAME.maxAttempts, Math.max(1, used)))
+        const stored = readDailyProgressStored(todayKey)
+        persistMergedDailyProgress(
+          todayKey,
+          mergeStoredDailyWithPeek(stored, {
+            completedAttempts: stored?.c ?? 0,
+            attemptsUsed: used,
+            limitReached: used >= GAME.maxAttempts
+          })
+        )
         okToStart = true
       }
     } catch {
@@ -1400,6 +1538,12 @@ export default function GameCanvas() {
       const r2 = Math.min(GAME.maxAttempts, st.r + 1)
       writeOfflineDaily(todayKey, { ...st, r: r2 })
       setAttempt(Math.min(GAME.maxAttempts, Math.max(1, r2)))
+      const merged = mergeStoredDailyWithPeek(readDailyProgressStored(todayKey), {
+        completedAttempts: st.c,
+        attemptsUsed: r2,
+        limitReached: st.c >= GAME.maxAttempts || r2 >= GAME.maxAttempts
+      })
+      persistMergedDailyProgress(todayKey, merged)
       okToStart = true
     } finally {
       consumeAttemptInFlightRef.current = false
@@ -1636,6 +1780,15 @@ export default function GameCanvas() {
           } else if (data && typeof data.attemptsUsed === "number") {
             const completed = Number(data.attemptsUsed)
             setAttempt(Math.min(GAME.maxAttempts + 1, completed + 1))
+            const stored = readDailyProgressStored(todayKey)
+            persistMergedDailyProgress(
+              todayKey,
+              mergeStoredDailyWithPeek(stored, {
+                completedAttempts: completed,
+                attemptsUsed: Math.max(completed, stored?.r ?? 0),
+                limitReached: completed >= GAME.maxAttempts
+              })
+            )
           }
         } finally {
           // Always re-fetch peek (even when submit body was empty / JSON parse failed) so rounds advance.
@@ -1647,7 +1800,25 @@ export default function GameCanvas() {
             if (peekRes.ok) {
               clearOfflineDaily(todayKey)
               const peekData = await peekRes.json()
-              const next = attemptFromPeekPayload(peekData)
+              const merged = mergeStoredDailyWithPeek(
+                readDailyProgressStored(todayKey),
+                peekData
+              )
+              persistMergedDailyProgress(todayKey, merged)
+              const next = attemptFromPeekPayload(merged)
+              setAttempt(next)
+              if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
+            } else if (data?.ok) {
+              const completed = Number(data.attemptsUsed ?? 0)
+              const stored = readDailyProgressStored(todayKey)
+              const merged = mergeStoredDailyWithPeek(stored, {
+                completedAttempts: completed,
+                attemptsUsed: Math.max(completed, stored?.r ?? 0),
+                limitReached:
+                  data?.isDayComplete === true || completed >= GAME.maxAttempts
+              })
+              persistMergedDailyProgress(todayKey, merged)
+              const next = attemptFromPeekPayload(merged)
               setAttempt(next)
               if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
             } else if (
@@ -1658,12 +1829,35 @@ export default function GameCanvas() {
               const c2 = Math.min(GAME.maxAttempts, st.c + 1)
               const nextSt = { ...st, c: c2 }
               writeOfflineDaily(todayKey, nextSt)
+              const merged = mergeStoredDailyWithPeek(
+                readDailyProgressStored(todayKey),
+                {
+                  completedAttempts: c2,
+                  attemptsUsed: nextSt.r,
+                  limitReached:
+                    c2 >= GAME.maxAttempts || nextSt.r >= GAME.maxAttempts
+                }
+              )
+              persistMergedDailyProgress(todayKey, merged)
               const next = attemptFromOfflineState(nextSt)
               setAttempt(next)
               if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
             }
           } catch {
-            if (
+            if (data?.ok) {
+              const completed = Number(data.attemptsUsed ?? 0)
+              const stored = readDailyProgressStored(todayKey)
+              const merged = mergeStoredDailyWithPeek(stored, {
+                completedAttempts: completed,
+                attemptsUsed: Math.max(completed, stored?.r ?? 0),
+                limitReached:
+                  data?.isDayComplete === true || completed >= GAME.maxAttempts
+              })
+              persistMergedDailyProgress(todayKey, merged)
+              const next = attemptFromPeekPayload(merged)
+              setAttempt(next)
+              if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
+            } else if (
               !data?.ok &&
               !(data && typeof data.attemptsUsed === "number")
             ) {
@@ -1671,6 +1865,16 @@ export default function GameCanvas() {
               const c2 = Math.min(GAME.maxAttempts, st.c + 1)
               const nextSt = { ...st, c: c2 }
               writeOfflineDaily(todayKey, nextSt)
+              const merged = mergeStoredDailyWithPeek(
+                readDailyProgressStored(todayKey),
+                {
+                  completedAttempts: c2,
+                  attemptsUsed: nextSt.r,
+                  limitReached:
+                    c2 >= GAME.maxAttempts || nextSt.r >= GAME.maxAttempts
+                }
+              )
+              persistMergedDailyProgress(todayKey, merged)
               const next = attemptFromOfflineState(nextSt)
               setAttempt(next)
               if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
