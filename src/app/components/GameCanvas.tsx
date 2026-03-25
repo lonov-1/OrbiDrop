@@ -136,6 +136,64 @@ function setStorageItem(key: string, value: string) {
   } catch {}
 }
 
+const ORBIFALL_STATS_STORAGE_KEY = "orbifallStats"
+
+function readStoredOrbifallStats(): Stats | null {
+  const raw = getStorageItem(ORBIFALL_STATS_STORAGE_KEY)
+  if (!raw) return null
+  try {
+    const p = JSON.parse(raw) as Partial<Stats>
+    return {
+      played: Math.max(0, Number(p.played) || 0),
+      best: typeof p.best === "number" && Number.isFinite(p.best) ? p.best : null,
+      totalDiff: Math.max(0, Number(p.totalDiff) || 0),
+      streak: Math.max(0, Number(p.streak) || 0),
+      maxStreak: Math.max(0, Number(p.maxStreak) || 0),
+      lastPlayed: typeof p.lastPlayed === "string" ? p.lastPlayed : "",
+      earthCollected: Math.max(0, Number(p.earthCollected) || 0)
+    }
+  } catch {
+    return null
+  }
+}
+
+/** After refresh: keep local backup when the server row is missing or stale. */
+function mergeHydratedPlayerStats(server: Stats, local: Stats): Stats {
+  const sp = server.played
+  const lp = local.played
+  if (lp > sp) {
+    return {
+      ...local,
+      earthCollected: Math.max(local.earthCollected, server.earthCollected)
+    }
+  }
+  if (sp > lp) {
+    return {
+      ...server,
+      earthCollected: Math.max(server.earthCollected, local.earthCollected)
+    }
+  }
+  return {
+    played: sp,
+    best:
+      server.best === null
+        ? local.best
+        : local.best === null
+          ? server.best
+          : Math.min(server.best, local.best),
+    totalDiff: Math.max(server.totalDiff, local.totalDiff),
+    streak: Math.max(server.streak, local.streak),
+    maxStreak: Math.max(server.maxStreak, local.maxStreak),
+    lastPlayed:
+      server.lastPlayed && local.lastPlayed
+        ? server.lastPlayed >= local.lastPlayed
+          ? server.lastPlayed
+          : local.lastPlayed
+        : server.lastPlayed || local.lastPlayed,
+    earthCollected: Math.max(server.earthCollected, local.earthCollected)
+  }
+}
+
 function getISODate(date = new Date()) {
   return date.toISOString().split("T")[0]
 }
@@ -398,7 +456,6 @@ export default function GameCanvas() {
 
   // Daily quota + submits go through /api/* → Supabase (same on localhost and production).
   // If those routes error (500/503), play still works and sessionStorage keeps round progress for the day.
-  const supabaseEnabled = true
 
   const [soundEnabled, setSoundEnabled] = useState(() => {
     return getStorageItem("orbidropSoundEnabled") !== "false"
@@ -754,14 +811,19 @@ export default function GameCanvas() {
   const [attempt, setAttempt] = useState(1)
   const [attemptResults, setAttemptResults] = useState<number[]>([])
   const [bestDiff, setBestDiff] = useState<number | null>(null)
-  const [stats, setStats] = useState<Stats>({
-    played: 0,
-    best: null,
-    totalDiff: 0,
-    streak: 0,
-    maxStreak: 0,
-    lastPlayed: "",
-    earthCollected: 0
+  const [stats, setStats] = useState<Stats>(() => {
+    const stored = readStoredOrbifallStats()
+    return (
+      stored ?? {
+        played: 0,
+        best: null,
+        totalDiff: 0,
+        streak: 0,
+        maxStreak: 0,
+        lastPlayed: "",
+        earthCollected: 0
+      }
+    )
   })
 
   // All-time stats (player-stats) + today's quota/completions (peek — does not consume attempts).
@@ -780,7 +842,15 @@ export default function GameCanvas() {
         const statsData = await statsRes.json().catch(() => ({}))
         const peekData = await peekRes.json().catch(() => ({}))
 
-        if (statsData?.stats) setStats(statsData.stats as Stats)
+        const serverStats = statsData?.stats as Stats | undefined
+        const localStats = readStoredOrbifallStats()
+        if (serverStats && localStats) {
+          setStats(mergeHydratedPlayerStats(serverStats, localStats))
+        } else if (serverStats) {
+          setStats(serverStats)
+        } else if (localStats) {
+          setStats(localStats)
+        }
 
         if (!peekRes.ok) {
           setAttempt(attemptFromOfflineState(readOfflineDaily(todayKey)))
@@ -839,11 +909,7 @@ export default function GameCanvas() {
         lastPlayed: today,
         earthCollected: prev.earthCollected
       }
-      try {
-        localStorage.setItem("orbifallStats", JSON.stringify(newStats))
-      } catch {
-        // ignore
-      }
+      setStorageItem(ORBIFALL_STATS_STORAGE_KEY, JSON.stringify(newStats))
       return newStats
     })
 
@@ -1065,23 +1131,6 @@ export default function GameCanvas() {
   }, [playfieldWidth, playfieldHeight, target, isSmallScreen])
 
   useEffect(() => {
-  if (supabaseEnabled) return
-
-  const savedStats = localStorage.getItem("orbifallStats")
-
-  if (savedStats !== null) {
-    const parsed = JSON.parse(savedStats) as Partial<Stats>
-    setStats(prev => ({
-      ...prev,
-      ...parsed,
-      earthCollected: parsed.earthCollected ?? prev.earthCollected
-    }))
-  }
-
-}, [])
-
-useEffect(() => {
-
   const seenRules = localStorage.getItem("orbifallRulesSeen")
 
   if (!seenRules) {
@@ -1398,7 +1447,7 @@ useEffect(() => {
         localStorage.setItem(earthKey, "true")
         setStats(prev => {
           const next = { ...prev, earthCollected: prev.earthCollected + 1 }
-          localStorage.setItem("orbifallStats", JSON.stringify(next))
+          setStorageItem(ORBIFALL_STATS_STORAGE_KEY, JSON.stringify(next))
           return next
         })
       } else {
