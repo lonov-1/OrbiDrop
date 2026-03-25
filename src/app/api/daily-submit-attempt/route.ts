@@ -58,7 +58,12 @@ export async function POST(req: Request) {
 
     const admin = tryGetSupabaseAdmin()
     if (!admin.ok) {
-      return jsonWithPlayerCookie({ error: admin.message }, 503, playerId, isNew)
+      return jsonWithPlayerCookie(
+        { ok: false, error: admin.message },
+        503,
+        playerId,
+        isNew
+      )
     }
     const supabase = admin.supabase
 
@@ -68,7 +73,12 @@ export async function POST(req: Request) {
 
     if (profileErr) {
       return jsonWithPlayerCookie(
-        { ok: false, error: profileErr.message, code: profileErr.code },
+        {
+          ok: false,
+          error: profileErr.message,
+          code: profileErr.code,
+          details: (profileErr as any).details
+        },
         500,
         playerId,
         isNew
@@ -83,7 +93,7 @@ export async function POST(req: Request) {
 
     if (countErr) {
       return jsonWithPlayerCookie(
-        { ok: false, error: countErr.message, code: countErr.code },
+        { ok: false, error: countErr.message, code: countErr.code, details: (countErr as any).details },
         500,
         playerId,
         isNew
@@ -114,7 +124,7 @@ export async function POST(req: Request) {
 
     if (quotaErr) {
       return jsonWithPlayerCookie(
-        { ok: false, error: quotaErr.message, code: quotaErr.code },
+        { ok: false, error: quotaErr.message, code: quotaErr.code, details: (quotaErr as any).details },
         500,
         playerId,
         isNew
@@ -141,7 +151,7 @@ export async function POST(req: Request) {
       )
       if (healErr) {
         return jsonWithPlayerCookie(
-          { ok: false, error: healErr.message, code: healErr.code },
+          { ok: false, error: healErr.message, code: healErr.code, details: (healErr as any).details },
           500,
           playerId,
           isNew
@@ -156,7 +166,9 @@ export async function POST(req: Request) {
           ok: false,
           reason: "reserved_attempt_required",
           attemptsUsed: rowsUsed,
-          quotaUsed
+          rowsUsed,
+          quotaUsed,
+          day
         },
         403,
         playerId,
@@ -178,7 +190,12 @@ export async function POST(req: Request) {
 
     if (insertErr) {
       return jsonWithPlayerCookie(
-        { ok: false, error: insertErr.message ?? "Insert failed" },
+        {
+          ok: false,
+          error: insertErr.message ?? "Insert failed",
+          code: insertErr.code,
+          details: (insertErr as any).details
+        },
         500,
         playerId,
         isNew
@@ -190,21 +207,49 @@ export async function POST(req: Request) {
 
     let bestDiff: number | null = null
     if (isDayComplete) {
-      const { data: bestRow } = await supabase
+      const { data: bestRow, error: bestRowErr } = await supabase
         .from("player_daily_attempts")
         .select("diff")
         .eq("day", day)
         .eq("player_id", playerId)
 
+      if (bestRowErr) {
+        return jsonWithPlayerCookie(
+          {
+            ok: false,
+            error: bestRowErr.message,
+            code: bestRowErr.code,
+            details: (bestRowErr as any).details
+          },
+          500,
+          playerId,
+          isNew
+        )
+      }
+
       if (bestRow && bestRow.length > 0) {
         bestDiff = Math.min(...bestRow.map(r => r.diff))
       }
 
-      const { data: existingStats } = await supabase
+      const { data: existingStats, error: existingStatsErr } = await supabase
         .from("player_stats")
         .select("*")
         .eq("player_id", playerId)
         .maybeSingle()
+
+      if (existingStatsErr) {
+        return jsonWithPlayerCookie(
+          {
+            ok: false,
+            error: existingStatsErr.message,
+            code: existingStatsErr.code,
+            details: (existingStatsErr as any).details
+          },
+          500,
+          playerId,
+          isNew
+        )
+      }
 
       const prev = existingStats
       const prevPlayed = prev?.played ?? 0
@@ -219,7 +264,7 @@ export async function POST(req: Request) {
       const nextStreak = prevStreak + 1
       const nextMaxStreak = Math.max(prevMaxStreak, nextStreak)
 
-      await supabase.from("player_stats").upsert(
+      const { error: statsUpsertErr } = await supabase.from("player_stats").upsert(
         {
           player_id: playerId,
           played: prevPlayed + 1,
@@ -233,6 +278,20 @@ export async function POST(req: Request) {
         },
         { onConflict: "player_id" }
       )
+
+      if (statsUpsertErr) {
+        return jsonWithPlayerCookie(
+          {
+            ok: false,
+            error: statsUpsertErr.message,
+            code: statsUpsertErr.code,
+            details: (statsUpsertErr as any).details
+          },
+          500,
+          playerId,
+          isNew
+        )
+      }
     }
 
     return jsonWithPlayerCookie(
