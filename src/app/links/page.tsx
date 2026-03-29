@@ -60,27 +60,18 @@ export default function LinksPage() {
       <section id="how-to-play" className="mt-12 scroll-mt-8">
         <h2 className="text-xl font-semibold">How to play Orbidrop</h2>
         <p className="mt-3">
-          Aim each drop toward the target zone and release when you are ready. You have a
-          limited number of attempts per round—use them wisely. When similar pieces touch,
-          they merge into a larger one; keep the jar from overflowing to stay in the run.
+          Aim each drop toward the target number and release when you are ready. You have three
+          attempts per day—use them wisely.
         </p>
         <p className="mt-3">
           Orbidrop is a{" "}
           <Link href="/" className="text-[#2a9d8f] underline-offset-4 hover:underline">
             free browser skill game
           </Link>{" "}
-          built around careful aiming and physics-based merges. Each round gives you a
-          target zone and a small number of attempts. Your job is to land drops where they
-          will do the most good—usually toward stable stacks that can absorb the next piece
-          without tipping the balance.
+          built around careful aiming the target number. Each day gives you a
+          new target number and three attempts.
         </p>
-        <p className="mt-3">
-          When two compatible pieces meet, they combine into a larger one. Chained merges
-          free vertical space and push your score upward. If the pile climbs too high or
-          you run out of attempts before the round objective is met, the run ends. There is
-          nothing to install: open the site, play a round in seconds, and come back when you
-          want another try.
-        </p>
+        
         <p className="mt-3">
           For quick improvement, read the{" "}
           <a href="#tips" className="text-[#2a9d8f] underline-offset-4 hover:underline">
@@ -99,28 +90,20 @@ export default function LinksPage() {
         <h3 className="mt-6 text-lg font-semibold">Quick tips</h3>
         <ul className="mt-2 list-disc space-y-1 pl-6">
           <li>
-            Prioritize clean stacks in the center so merges chain instead of blocking the
-            rim.
+            Prioritize the feeling for the glass filling up.
           </li>
           <li>
-            Save your last attempt for a high-value placement when the target is wide.
+            Watch the jar height early.
           </li>
           <li>
-            Watch the jar height early—small corrections beat a late panic clear.
+            Save your last attempt for a attempt trying to count the orbs and feeling the glass filling up.
           </li>
         </ul>
         <p className="mt-6">
-          A strong Orbidrop round is less about speed and more about shape. Keep the
-          tallest mass near the middle when you can, so sideways spills are less likely to
-          end the game early. Before each drop, glance at how much headroom is left and
-          whether a merge is one touch away—sometimes waiting for a better target width is
-          smarter than forcing a risky placement.
+          A strong Orbidrop round is about feeling and timing.
         </p>
         <p className="mt-3">
-          Treat your attempts like a small budget. If the first two drops set up a big merge
-          or clear a dangerous ledge, you have more freedom on the last shot. If the jar is
-          already tight, prioritize survival over greed: a modest merge that buys height is
-          often worth more than a flashy play that leaves you one bounce from overflow.
+          Treat your attempts like a small budget. 
         </p>
         <p className="mt-3">
           When you are ready to apply this, jump back to the{" "}

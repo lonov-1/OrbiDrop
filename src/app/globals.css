@@ -213,6 +213,44 @@ body:has(.orbifall-home) {
   font-weight: 300;
 }
 
+/* Mobile: tighter shell, readable footer taps, room for fixed link bar + FABs */
+@media (max-width: 480px) {
+  .orbifall-main.orbifall-home {
+    padding-left: max(10px, env(safe-area-inset-left, 0px));
+    padding-right: max(10px, env(safe-area-inset-right, 0px));
+    padding-top: max(10px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+    /*
+     * Slightly taller reserve so DROP / glass clear the docked footer + theme/sound buttons.
+     */
+    --orbifall-game-bottom-pad: calc(52px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .orbifall-main.orbifall-home .orbifall-game-wrap {
+    padding-top: 8px;
+    width: 100%;
+    max-width: min(100vw, 100%);
+  }
+
+  .orbifall-site-footer-inner {
+    font-size: 0.6875rem; /* ~11px */
+    line-height: 1.35;
+    padding: 0.45rem 0.65rem;
+    min-height: 2.75rem;
+    box-sizing: border-box;
+    column-gap: 0.35rem;
+    row-gap: 0.3rem;
+    align-content: center;
+  }
+
+  .orbifall-site-footer-inner a {
+    padding: 0.3rem 0.25rem;
+    display: inline-flex;
+    align-items: center;
+    opacity: 0.62;
+  }
+}
+
 /* Top game UI — subtle motion (premium, not loud) */
 @keyframes orbifall-target-live {
   0%,

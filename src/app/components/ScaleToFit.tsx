@@ -11,11 +11,17 @@ export default function ScaleToFit({ children }: { children: React.ReactNode }) 
 
   useEffect(() => {
     const update = () => {
-      const availableW = Math.min(window.innerWidth * 0.9, MAX_WIDTH)
-      const availableH =
+      const w = typeof window !== "undefined" ? window.innerWidth : FRAME_WIDTH
+      const narrow = w <= 480
+      // Slightly wider use of screen on phones; reserve space for fixed footer so scale fits the visible column.
+      const widthFactor = narrow ? 0.94 : 0.9
+      const footerReservePx = narrow ? 52 : 0
+      const availableW = Math.min(w * widthFactor, MAX_WIDTH)
+      const vh =
         typeof window === "undefined"
           ? FRAME_HEIGHT
-          : (window.visualViewport?.height ?? window.innerHeight)
+          : window.visualViewport?.height ?? window.innerHeight
+      const availableH = Math.max(220, vh - footerReservePx)
       const s = Math.min(
         Math.max(0, availableW / FRAME_WIDTH),
         Math.max(0, availableH / FRAME_HEIGHT)

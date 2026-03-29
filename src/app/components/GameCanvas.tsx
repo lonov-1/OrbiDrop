@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import * as Matter from "matter-js"
 import {
@@ -23,7 +23,8 @@ type Stats = {
 const GAME = {
   width: 380,
   height: 520,
-  startDate: "2024-01-01",
+  /** First calendar day of “Orbidrop #1” (local date). Bump to reset the public day counter. */
+  startDate: "2026-03-29",
   minTarget: 80,
   targetRange: 80,
   maxAttempts: 3
@@ -430,8 +431,12 @@ function persistMergedDailyProgress(
 }
 
 function getDiffDaysSinceStart(today = new Date()) {
-  const start = new Date(GAME.startDate)
-  return Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+  const [y, m, d] = GAME.startDate.split("-").map(Number)
+  const startLocal = new Date(y, m - 1, d)
+  const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  return Math.round(
+    (todayLocal.getTime() - startLocal.getTime()) / (1000 * 60 * 60 * 24)
+  )
 }
 
 function getDailyTarget(today = new Date()) {
@@ -570,6 +575,8 @@ export default function GameCanvas() {
   const countRafRef = useRef<number | null>(null)
   const earthDroppedRef = useRef(false)
   const earthWonThisRunRef = useRef(false)
+  /** True until the first real ball of this DROP (spawnBall or spawnEarthBall) is created. */
+  const firstDropOfAttemptRef = useRef(false)
   const prevGameOverRef = useRef(false)
 
   const [ballCount, setBallCount] = useState(0)
@@ -1146,8 +1153,9 @@ export default function GameCanvas() {
     }
   }, [todayKey])
 
-  const [target] = useState(getDailyTarget())
-  const [dayNumber] = useState(getDayNumber())
+  /** Same local calendar as `todayKey` + countdown (next midnight) — must not be frozen from first mount. */
+  const target = useMemo(() => getDailyTarget(), [todayKey])
+  const dayNumber = useMemo(() => getDayNumber(), [todayKey])
 
   const [attempt, setAttempt] = useState(1)
   const [attemptResults, setAttemptResults] = useState<number[]>([])
@@ -1453,6 +1461,11 @@ export default function GameCanvas() {
     const circleRadiusPx = (b: Matter.Body) =>
       typeof b.circleRadius === "number" && b.circleRadius > 0 ? b.circleRadius : 11
 
+    const endFirstDropGlow = (b: Matter.Body) => {
+      const ext = b as Matter.Body & { orbifallFirstDropGlow?: boolean }
+      if (ext.orbifallFirstDropGlow) ext.orbifallFirstDropGlow = false
+    }
+
     const onCollisionStart = (event: Matter.IEventCollision<Matter.Engine>) => {
       const pairs = event.pairs || []
       let best: BounceAudioParams | null = null
@@ -1465,6 +1478,10 @@ export default function GameCanvas() {
         const pair = pairs[i]
         const { bodyA, bodyB } = pair
         const collision = pair.collision
+        if (!(isDecor(bodyA) && isDecor(bodyB))) {
+          if (!isDecor(bodyA)) endFirstDropGlow(bodyA)
+          if (!isDecor(bodyB)) endFirstDropGlow(bodyB)
+        }
         if (!collision?.normal) continue
 
         const nx = collision.normal.x
@@ -1544,7 +1561,34 @@ export default function GameCanvas() {
 
     Matter.Events.on(engine, "collisionStart", onCollisionStart)
 
+    const onAfterRender = () => {
+      const ctx = render.context
+      const bodies = Matter.Composite.allBodies(engine.world)
+      for (let i = 0; i < bodies.length; i++) {
+        const b = bodies[i] as Matter.Body & { orbifallFirstDropGlow?: boolean }
+        if (!b.orbifallFirstDropGlow || b.isStatic) continue
+        const r = circleRadiusPx(b)
+        const { x, y } = b.position
+        const outer = r * 2.35
+        ctx.save()
+        ctx.globalCompositeOperation = "lighter"
+        const g = ctx.createRadialGradient(x, y, r * 0.2, x, y, outer)
+        g.addColorStop(0, "rgba(45, 212, 191, 0)")
+        g.addColorStop(0.5, "rgba(42, 157, 143, 0.22)")
+        g.addColorStop(0.85, "rgba(45, 212, 191, 0.1)")
+        g.addColorStop(1, "rgba(42, 157, 143, 0)")
+        ctx.fillStyle = g
+        ctx.beginPath()
+        ctx.arc(x, y, outer, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
+      }
+    }
+
+    Matter.Events.on(render, "afterRender", onAfterRender)
+
     return () => {
+      Matter.Events.off(render, "afterRender", onAfterRender)
       Matter.Events.off(engine, "collisionStart", onCollisionStart)
       Runner.stop(runner)
       Render.stop(render)
@@ -1593,6 +1637,11 @@ export default function GameCanvas() {
 
     if (!engineRef.current) return
 
+    const isFirstDropOfAttempt = firstDropOfAttemptRef.current
+    if (isFirstDropOfAttempt) {
+      firstDropOfAttemptRef.current = false
+    }
+
     // Base radii +~18% vs prior small-orbs pass → ~60% jar fill at TARGET; still scaled by daily TARGET.
     const baseR = isSmallScreen ? Math.random() * 4.7 + 8.3 : Math.random() * 5.3 + 10
     const radius = baseR * orbRadiusScaleForTarget(target)
@@ -1604,7 +1653,7 @@ export default function GameCanvas() {
     // Shaded "3D-ish" texture (cached) for less-flat-looking balls.
     const keyBucket = Math.max(-24, Math.min(24, Math.round(brightnessDelta / 3) * 3))
     const textureKey = `${baseColor}_${keyBucket}`
-    let textureUri = ballTextureCacheRef.current.get(textureKey)
+    let textureUri = ballTextureCacheRef.current.get(textureKey) ?? ""
     if (!textureUri) {
       textureUri = makeBallTextureUri(baseColor, brightnessDelta)
       ballTextureCacheRef.current.set(textureKey, textureUri)
@@ -1633,6 +1682,10 @@ export default function GameCanvas() {
       }
     )
 
+    if (isFirstDropOfAttempt) {
+      ;(ball as Matter.Body & { orbifallFirstDropGlow?: boolean }).orbifallFirstDropGlow = true
+    }
+
     Matter.World.add(engineRef.current.world, ball)
 
     Matter.Body.setVelocity(ball, {
@@ -1648,6 +1701,11 @@ export default function GameCanvas() {
   const spawnEarthBall = () => {
 
     if (!engineRef.current) return
+
+    const isFirstDropOfAttempt = firstDropOfAttemptRef.current
+    if (firstDropOfAttemptRef.current) {
+      firstDropOfAttemptRef.current = false
+    }
 
     const radius = EARTH_RADIUS
 
@@ -1669,6 +1727,10 @@ export default function GameCanvas() {
         }
       }
     )
+
+    if (isFirstDropOfAttempt) {
+      ;(ball as Matter.Body & { orbifallFirstDropGlow?: boolean }).orbifallFirstDropGlow = true
+    }
 
     Matter.World.add(engineRef.current.world, ball)
     Matter.Body.setVelocity(ball, {
@@ -1909,6 +1971,7 @@ export default function GameCanvas() {
     hasPressedDropRef.current = true
     clearIdleDecorBalls()
     resetBalls()
+    firstDropOfAttemptRef.current = true
 
     const earthKey = `${EARTH_DROP_KEY_PREFIX}${todayKey}`
     earthDroppedRef.current = localStorage.getItem(earthKey) === "true"
@@ -2701,6 +2764,7 @@ const revealStyle = gameFinished
 
     <div
       ref={shakeRef}
+      className="max-[480px]:px-0.5"
       style={{
         display:"flex",
         flexDirection:"column",
@@ -2708,7 +2772,8 @@ const revealStyle = gameFinished
         position:"relative",
         zIndex:0,
         width:"100%",
-        padding: isCompact ? "4px 6px 4px" : "0 0 8px 0",
+        maxWidth:"100%",
+        padding: isCompact ? "2px 4px 4px" : "0 0 8px 0",
         paddingBottom: isCompact
           ? "max(4px, var(--orbifall-game-bottom-pad, 8px))"
           : "max(8px, var(--orbifall-game-bottom-pad, 40px))",
@@ -2742,7 +2807,7 @@ const revealStyle = gameFinished
       {/* Unified top control panel — dense column, capped width (centered) */}
       <div
         className={
-          "mx-auto mb-1 flex w-full max-w-md flex-col gap-1.5 rounded-2xl border p-2 sm:mb-1.5 sm:gap-2 sm:p-2.5 " +
+          "mx-auto mb-1 flex w-full max-w-md flex-col gap-1.5 rounded-2xl border p-2 max-[480px]:mb-0.5 max-[480px]:gap-1 max-[480px]:rounded-xl max-[480px]:px-1.5 max-[480px]:py-1.5 sm:mb-1.5 sm:gap-2 sm:p-2.5 " +
           (darkMode
             ? "border-white/[0.07] bg-[rgba(34,34,36,0.94)] shadow-[0_4px_20px_rgba(0,0,0,0.26),inset_0_1px_0_rgba(255,255,255,0.05)]"
             : "border-black/[0.055] bg-white/[0.96] shadow-[0_4px_18px_rgba(0,0,0,0.06),inset_0_1px_0_rgba(255,255,255,0.88)]")
@@ -3971,8 +4036,8 @@ const revealStyle = gameFinished
                 ? "calc(10px + env(safe-area-inset-right))"
                 : "calc(14px + env(safe-area-inset-right))",
               bottom: isSmallScreen
-                ? "calc(10px + env(safe-area-inset-bottom))"
-                : "calc(18px + env(safe-area-inset-bottom))",
+                ? "calc(24px + env(safe-area-inset-bottom))"
+                : "calc(32px + env(safe-area-inset-bottom))",
               display: "flex",
               gap: "6px",
               alignItems: "center",
