@@ -2764,23 +2764,25 @@ const revealStyle = gameFinished
 
     <div
       ref={shakeRef}
-      className="max-[480px]:px-0.5"
+      className="flex h-full min-h-0 w-full max-w-[420px] flex-col justify-between max-[480px]:px-0.5"
       style={{
-        display:"flex",
-        flexDirection:"column",
-        alignItems:"center",
         position:"relative",
         zIndex:0,
         width:"100%",
         maxWidth:"100%",
-        padding: isCompact ? "2px 4px 4px" : "0 0 8px 0",
-        paddingBottom: isCompact
-          ? "max(4px, var(--orbifall-game-bottom-pad, 8px))"
-          : "max(8px, var(--orbifall-game-bottom-pad, 40px))",
+        padding: isCompact ? "2px 4px 0" : "0",
         touchAction: isCompact ? "manipulation" : undefined,
         overflow: isCompact ? "hidden" : undefined
       }}
     >
+      <div
+        className="relative flex min-h-0 w-full flex-1 flex-col items-center overflow-hidden"
+        style={{
+          paddingBottom: isCompact
+            ? "max(4px, var(--orbifall-game-bottom-pad, 8px))"
+            : "max(8px, var(--orbifall-game-bottom-pad, 40px))"
+        }}
+      >
 
      <div
        ref={perfectBurstContainerRef}
@@ -3516,6 +3518,9 @@ const revealStyle = gameFinished
         </div>
       </div>
 
+      </div>
+
+      <div className="flex w-full shrink-0 justify-center px-1 pb-2 pt-1">
       <button
         className={showDropPulse ? "orbifall-drop-btn-pulse" : undefined}
         onClick={() => {
@@ -3548,7 +3553,7 @@ const revealStyle = gameFinished
         }}
         disabled={isCounting || isStopping}
         style={{
-          marginTop: isCompact ? 10 : 2,
+          marginTop: 0,
           width: "min(85vw, 320px)",
           maxWidth: 320,
           padding: isCompact ? "10px 18px" : "14px 24px",
@@ -3596,6 +3601,7 @@ const revealStyle = gameFinished
               ? "STOP"
               : "DROP"}
       </button>
+      </div>
 
       {gameOver && showStats && typeof document !== "undefined" && createPortal(
         <div

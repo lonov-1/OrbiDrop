@@ -3,7 +3,19 @@
 import { useLayoutEffect, useRef, useState } from "react"
 
 const FRAME_WIDTH = 390
-const FRAME_HEIGHT = 960
+/** Design frame tall enough for header + jar + action row; avoids clipping at scale 1. */
+const FRAME_HEIGHT = 1024
+
+function heightVisibleInViewport(el: HTMLElement): number {
+  if (typeof window === "undefined") return el.getBoundingClientRect().height
+  const r = el.getBoundingClientRect()
+  const vv = window.visualViewport
+  if (!vv) return r.height
+  const vTop = vv.offsetTop
+  const vBottom = vTop + vv.height
+  const overlap = Math.min(r.bottom, vBottom) - Math.max(r.top, vTop)
+  return Math.max(2, Math.min(r.height, overlap))
+}
 
 function computeScale(width: number, height: number): number {
   if (width < 2 || height < 2) return 1
@@ -27,7 +39,8 @@ export default function ScaleToFit({ children }: { children: React.ReactNode }) 
 
     const update = () => {
       const r = el.getBoundingClientRect()
-      setScale(computeScale(r.width, r.height))
+      const h = heightVisibleInViewport(el)
+      setScale(computeScale(r.width, h))
     }
 
     update()
@@ -56,7 +69,7 @@ export default function ScaleToFit({ children }: { children: React.ReactNode }) 
   return (
     <div
       ref={containerRef}
-      className="flex h-full w-full min-h-0 items-center justify-center"
+      className="flex h-full max-h-full w-full min-h-0 items-center justify-center"
     >
       <div
         style={{

@@ -70,11 +70,13 @@ export default function Home() {
       <HomeBodyScroll />
       <h1 className="sr-only">Orbidrop – The Addictive Browser Game</h1>
 
-      <div className="flex min-h-0 w-full flex-1 flex-col">
-        <div className="mx-auto flex min-h-0 w-full max-w-[420px] flex-1 flex-col justify-center">
-          <ScaleToFit>
-            <GameCanvasLoader />
-          </ScaleToFit>
+      <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-between">
+        <div className="mx-auto flex min-h-0 w-full max-w-[420px] flex-1 flex-col items-center justify-center">
+          <div className="flex h-full max-h-full w-full min-h-0 flex-1 items-center justify-center">
+            <ScaleToFit>
+              <GameCanvasLoader />
+            </ScaleToFit>
+          </div>
         </div>
       </div>
 
