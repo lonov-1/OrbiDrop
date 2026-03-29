@@ -3,6 +3,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import * as Matter from "matter-js"
+import {
+  runCountUp,
+  runImpactScale,
+  runDiffReveal,
+  STOP_RESULT_TIMING
+} from "@/lib/stopResultAnimation"
 
 type Stats = {
   played: number
@@ -28,21 +34,21 @@ const GAME = {
  * Peaks are pre-bus; buses scale to destination.
  */
 const AUDIO = {
-  UI_BUS: 0.94,
-  /** Physics SFX — keep low; per-hit gain also scaled by ball mass/radius/impact */
-  PHYSICS_BUS: 0.3,
+  UI_BUS: 1,
+  /** Physics SFX; per-hit gain also scaled by ball mass/radius/impact */
+  PHYSICS_BUS: 0.4,
   /** DROP — airy lift + soft body */
-  START_PEAK: 0.042,
+  START_PEAK: 0.052,
   START_MS: 0.11,
   /** STOP — warm sine layers; peaks are body loudness (very gentle) */
-  STOP_PEAK_DEFAULT: 0.013,
-  STOP_PEAK_NEAR: 0.017,
-  STOP_PEAK_PERFECT: 0.022,
+  STOP_PEAK_DEFAULT: 0.016,
+  STOP_PEAK_NEAR: 0.021,
+  STOP_PEAK_PERFECT: 0.028,
   STOP_MS_DEFAULT: 0.3,
   STOP_MS_NEAR: 0.34,
   STOP_MS_PERFECT: 0.4,
   /** Ball hit — ceiling; actual peak uses impact + body physics */
-  BOUNCE_PEAK_MAX: 0.028,
+  BOUNCE_PEAK_MAX: 0.036,
   BOUNCE_MS: 0.055,
   /** Max collision SFX per rolling second */
   BOUNCE_MAX_PER_SEC: 5
@@ -329,6 +335,60 @@ function writeDailyProgressStored(day: string, st: DailyProgressStored) {
   )
 }
 
+const ORBIFALL_RULES_SEEN_KEY = "orbifallRulesSeen"
+
+/** True if this browser has seen the rules, played before, or has saved daily/orb progress. */
+function isReturningOrbifallUser(): boolean {
+  if (typeof window === "undefined") return true
+  try {
+    if (localStorage.getItem(ORBIFALL_RULES_SEEN_KEY) === "true") return true
+
+    const stats = readStoredOrbifallStats()
+    if (stats) {
+      if (stats.played > 0 || stats.totalDiff > 0) return true
+      if (stats.lastPlayed && String(stats.lastPlayed).trim().length > 0) return true
+    }
+
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (!k) continue
+      if (k.startsWith(ORBIFALL_DAILY_PROGRESS_KEY)) {
+        const raw = localStorage.getItem(k)
+        if (!raw) continue
+        try {
+          const j = JSON.parse(raw) as Partial<DailyProgressStored>
+          const c = Number(j.c) || 0
+          const r = Number(j.r) || 0
+          if (c > 0 || r > 0 || j.exhausted === true) return true
+        } catch {
+          continue
+        }
+      }
+      if (k.startsWith(EARTH_DROP_KEY_PREFIX)) return true
+    }
+
+    if (typeof sessionStorage !== "undefined") {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i)
+        if (!k?.startsWith(OFFLINE_DAILY_KEY)) continue
+        const raw = sessionStorage.getItem(k)
+        if (!raw) continue
+        try {
+          const j = JSON.parse(raw) as Partial<OfflineDaily>
+          const c = Number(j.c) || 0
+          const r = Number(j.r) || 0
+          if (c > 0 || r > 0) return true
+        } catch {
+          continue
+        }
+      }
+    }
+  } catch {
+    return true
+  }
+  return false
+}
+
 type PeekLike = {
   completedAttempts?: unknown
   attemptsUsed?: unknown
@@ -523,10 +583,8 @@ export default function GameCanvas() {
   const [countDisplay, setCountDisplay] = useState(0)
   const [showStats, setShowStats] = useState(false)
   const [statsDismissed, setStatsDismissed] = useState(false)
-  /** True only after finishing the 3rd try this session — hides glass countdown until stats are dismissed. Reload clears this so hydrated "game over" still shows the countdown. */
-  const [glassCountdownBlocked, setGlassCountdownBlocked] = useState(false)
   // Auto-open stats once when the game finishes.
-  // After the user closes, the STATS button is spam-locked via statsDismissed.
+  // After the user closes stats, header stats still opens the modal; statsDismissed affects other flows.
   const [statsAutoOpened, setStatsAutoOpened] = useState(false)
   const [showEarthWin, setShowEarthWin] = useState(false)
   const [stopImpact, setStopImpact] = useState(false)
@@ -540,6 +598,8 @@ export default function GameCanvas() {
   const [rulesPopUpReady, setRulesPopUpReady] = useState(false)
   const [isSmallScreen, setIsSmallScreen] = useState(false)
   const [stopDiff, setStopDiff] = useState<number | null>(null)
+  /** Diff number stays hidden until after count-up + impact + stagger (see STOP_RESULT_TIMING). */
+  const [diffRevealVisible, setDiffRevealVisible] = useState(false)
   const [stopPulse, setStopPulse] = useState(false)
   const [perfectBurstId, setPerfectBurstId] = useState(0)
   const [rewardBurstId, setRewardBurstId] = useState(0)
@@ -566,6 +626,8 @@ export default function GameCanvas() {
 
   const resultValueRef = useRef<HTMLDivElement | null>(null)
   const diffValueRef = useRef<HTMLDivElement | null>(null)
+  /** Cancel count-up + pending stagger timeouts if DROP starts mid-sequence. */
+  const stopResultSequenceCleanupRef = useRef<(() => void) | null>(null)
 
   const audioCtxRef = useRef<AudioContext | null>(null)
   const uiBusRef = useRef<GainNode | null>(null)
@@ -944,7 +1006,7 @@ export default function GameCanvas() {
       if (isPerfect) {
         // Lower-register major lift + soft sparkle (less shrill than prior C6 band)
         const freqs = [261.63, 329.63, 392.0, 523.25, 1046.5].map(f => f * pm)
-        const peaks = [0.088, 0.08, 0.074, 0.092, 0.038]
+        const peaks = [0.1, 0.092, 0.085, 0.105, 0.044]
         freqs.forEach((f, i) => {
           const osc = ctx.createOscillator()
           const g = ctx.createGain()
@@ -964,7 +1026,7 @@ export default function GameCanvas() {
 
       if (diff <= 3) {
         const freqs = [293.66, 369.99, 440.0].map(f => f * pm)
-        const notePeak = 0.064
+        const notePeak = 0.074
         freqs.forEach((f, i) => {
           const osc = ctx.createOscillator()
           const g = ctx.createGain()
@@ -980,6 +1042,26 @@ export default function GameCanvas() {
           osc.stop(t0 + 0.22)
         })
       }
+    })
+  }
+
+  /** Short “pop” when the result value hits — pairs with impact scale. */
+  const playResultImpactPop = () => {
+    withAudioContext(ctx => {
+      const ui = uiBusRef.current
+      if (!ui) return
+      const now = ctx.currentTime
+      const osc = ctx.createOscillator()
+      const g = ctx.createGain()
+      osc.type = "sine"
+      osc.frequency.setValueAtTime(1046.5, now)
+      g.gain.setValueAtTime(0.0001, now)
+      g.gain.exponentialRampToValueAtTime(0.014, now + 0.006)
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.042)
+      osc.connect(g)
+      g.connect(ui)
+      osc.start(now)
+      osc.stop(now + 0.05)
     })
   }
 
@@ -1164,10 +1246,6 @@ export default function GameCanvas() {
   }, [todayKey])
 
   const gameOver = attempt > GAME.maxAttempts
-
-  useEffect(() => {
-    if (!gameOver) setGlassCountdownBlocked(false)
-  }, [gameOver])
 
   // When a new game finishes (gameOver flips from false -> true),
   // reset the stats-open locks so the stats can appear again.
@@ -1498,13 +1576,18 @@ export default function GameCanvas() {
   }, [playfieldWidth, playfieldHeight, target, isSmallScreen])
 
   useEffect(() => {
-  const seenRules = localStorage.getItem("orbifallRulesSeen")
-
-  if (!seenRules) {
+    if (isReturningOrbifallUser()) {
+      try {
+        if (localStorage.getItem(ORBIFALL_RULES_SEEN_KEY) !== "true") {
+          localStorage.setItem(ORBIFALL_RULES_SEEN_KEY, "true")
+        }
+      } catch {
+        /* ignore */
+      }
+      return
+    }
     setShowRules(true)
-  }
-
-}, [])
+  }, [])
 
   const spawnBall = () => {
 
@@ -1811,6 +1894,8 @@ export default function GameCanvas() {
 
     playStartSound()
     triggerHaptic("press") // fallback for keyboard
+    stopResultSequenceCleanupRef.current?.()
+    stopResultSequenceCleanupRef.current = null
     setGameFinished(false)
     setStopDiff(null)
     setStopPulse(false)
@@ -1818,6 +1903,7 @@ export default function GameCanvas() {
     setStopImpact(false)
     setIsCounting(false)
     setCountDisplay(0)
+    setDiffRevealVisible(false)
     earthWonThisRunRef.current = false
 
     hasPressedDropRef.current = true
@@ -1926,7 +2012,6 @@ export default function GameCanvas() {
     // Smooth slow-down -> settle -> reveal
     const rampDownMs = 175 // 150-250ms target
     const settleHoldMs = 25 // delay before result reveal
-    const popMs = 175 // fade/pop duration
     const revealAtMs = rampDownMs + settleHoldMs
     const settleBoostMs = 120
 
@@ -1986,10 +2071,8 @@ export default function GameCanvas() {
     }
 
     const revealFn = () => {
-      // Reveal + feedback while balls are visually settling.
-      setIsCounting(false)
-      setCountDisplay(finalCount)
       setGameFinished(true)
+      setBallCount(finalCount)
       setAttemptResults(prev => [...prev, diff])
       setBestDiff(prev => (prev === null ? diff : Math.min(prev, diff)))
 
@@ -2000,7 +2083,6 @@ export default function GameCanvas() {
             const completed = Number(data.attemptsUsed ?? 0)
             const nextSlot = Math.min(GAME.maxAttempts + 1, completed + 1)
             setAttempt(nextSlot)
-            if (nextSlot > GAME.maxAttempts) setGlassCountdownBlocked(true)
 
             void fetch(`/api/earth-winner?date=${encodeURIComponent(todayKey)}`, {
               credentials: "include"
@@ -2071,7 +2153,6 @@ export default function GameCanvas() {
               persistMergedDailyProgress(todayKey, merged)
               const next = attemptFromPeekPayload(merged)
               setAttempt(next)
-              if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
             } else if (data?.ok) {
               const completed = Number(data.attemptsUsed ?? 0)
               const stored = readDailyProgressStored(todayKey)
@@ -2084,7 +2165,6 @@ export default function GameCanvas() {
               persistMergedDailyProgress(todayKey, merged)
               const next = attemptFromPeekPayload(merged)
               setAttempt(next)
-              if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
             } else if (
               !data?.ok &&
               !(data && typeof data.attemptsUsed === "number")
@@ -2105,7 +2185,6 @@ export default function GameCanvas() {
               persistMergedDailyProgress(todayKey, merged)
               const next = attemptFromOfflineState(nextSt)
               setAttempt(next)
-              if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
             }
           } catch {
             if (data?.ok) {
@@ -2120,7 +2199,6 @@ export default function GameCanvas() {
               persistMergedDailyProgress(todayKey, merged)
               const next = attemptFromPeekPayload(merged)
               setAttempt(next)
-              if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
             } else if (
               !data?.ok &&
               !(data && typeof data.attemptsUsed === "number")
@@ -2141,30 +2219,74 @@ export default function GameCanvas() {
               persistMergedDailyProgress(todayKey, merged)
               const next = attemptFromOfflineState(nextSt)
               setAttempt(next)
-              if (next > GAME.maxAttempts) setGlassCountdownBlocked(true)
             }
           }
         }
       })
 
-      if (isPerfect) setPerfectBurstId(prev => prev + 1)
-      // Small “dopamine” burst for diff 1..5 (very light, not noisy).
-      if (!isPerfect && diff <= 5) setRewardBurstId(prev => prev + 1)
+      stopResultSequenceCleanupRef.current?.()
+      const revealTimeouts: number[] = []
+      let cancelCountUp: (() => void) | undefined
+      const cleanupSequence = () => {
+        cancelCountUp?.()
+        revealTimeouts.forEach(clearTimeout)
+      }
+      stopResultSequenceCleanupRef.current = cleanupSequence
 
-      if (diff <= 3) {
-        playResultSting(diff, isPerfect)
+      setDiffRevealVisible(false)
+      setScoreReveal(true)
+      setStopPulse(diff <= 5)
+
+      const finishImpactPhase = () => {
+        setIsCounting(false)
+        setCountDisplay(finalCount)
+
+        if (isPerfect) setPerfectBurstId(prev => prev + 1)
+        if (!isPerfect && diff <= 5) setRewardBurstId(prev => prev + 1)
+        if (diff <= 3) playResultSting(diff, isPerfect)
+        playResultImpactPop()
+
+        const elResult = resultValueRef.current
+        if (elResult) runImpactScale(elResult, STOP_RESULT_TIMING.IMPACT_MS)
+
+        revealTimeouts.push(
+          window.setTimeout(() => {
+            setDiffRevealVisible(true)
+          }, STOP_RESULT_TIMING.DIFF_STAGGER_MS)
+        )
       }
 
-      // Visual reward only for decent results (diff <= 5).
-      setStopPulse(diff <= 5)
-      setScoreReveal(true)
+      const afterPause = () => {
+        if (finalCount === 0) {
+          finishImpactPhase()
+          return
+        }
+        setIsCounting(true)
+        setCountDisplay(0)
+        cancelCountUp = runCountUp({
+          from: 0,
+          to: finalCount,
+          durationMs: STOP_RESULT_TIMING.COUNT_MS,
+          onUpdate: v => {
+            const n = Math.min(finalCount, Math.max(0, Math.round(v)))
+            setCountDisplay(n)
+          },
+          onComplete: finishImpactPhase
+        })
+      }
 
-      window.setTimeout(() => {
-        setScoreReveal(false)
-        setStopPulse(false)
-        isStoppingRef.current = false
-        setIsStopping(false)
-      }, popMs)
+      revealTimeouts.push(
+        window.setTimeout(afterPause, STOP_RESULT_TIMING.PAUSE_MS)
+      )
+
+      revealTimeouts.push(
+        window.setTimeout(() => {
+          setScoreReveal(false)
+          setStopPulse(false)
+          isStoppingRef.current = false
+          setIsStopping(false)
+        }, STOP_RESULT_TIMING.UI_SETTLE_MS)
+      )
 
       if (
         earthWonThisRunRef.current &&
@@ -2224,73 +2346,12 @@ export default function GameCanvas() {
 
   }
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== "Space") return
-      if (e.repeat) return
-      const el = e.target as HTMLElement
-      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return
-      if (showRules || showStats) return
-      if (isCounting || isStopping) return
-      e.preventDefault()
-      if (gameOver) {
-        setStatsDismissed(false)
-        setStatsAutoOpened(true)
-        setShowStats(true)
-        return
-      }
-      if (running) stopGame()
-      else startGame()
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [
-    gameOver,
-    running,
-    isCounting,
-    isStopping,
-    isSmallScreen,
-    statsDismissed,
-    showRules,
-    showStats,
-    isEarthDropPlayerToday
-  ])
-
-  useEffect(() => {
-    if (!scoreReveal) return
-    const diff = stopDiff
-    const perf =
-      diff === 0
-        ? "perfect"
-        : diff !== null && diff <= 3
-        ? "close"
-        : diff !== null && diff <= 10
-        ? "medium"
-        : "far"
-
-    // Smooth, natural appearance: 0.95 -> (tiny overshoot) -> 1.0
-    const startScale = 0.95
-    const overScale = perf === "perfect" ? 1.06 : perf === "close" ? 1.035 : perf === "medium" ? 1.015 : 1.01
-
-    const elResult = resultValueRef.current
-    const elDiff = diffValueRef.current
-    elResult?.animate(
-      [
-        { opacity: 0, transform: `translateY(4px) scale(${startScale})` },
-        { opacity: 1, transform: `translateY(0px) scale(${overScale})` },
-        { opacity: 1, transform: "translateY(0px) scale(1)" }
-      ],
-      { duration: 170, easing: "cubic-bezier(0.2, 0.9, 0.2, 1)", fill: "forwards" }
-    )
-    elDiff?.animate(
-      [
-        { opacity: 0, transform: `translateY(4px) scale(${startScale})` },
-        { opacity: 1, transform: `translateY(0px) scale(${overScale})` },
-        { opacity: 1, transform: "translateY(0px) scale(1)" }
-      ],
-      { duration: 170, easing: "cubic-bezier(0.2, 0.9, 0.2, 1)", fill: "forwards" }
-    )
-  }, [scoreReveal, stopDiff])
+  useLayoutEffect(() => {
+    if (!diffRevealVisible) return
+    const el = diffValueRef.current
+    if (!el) return
+    runDiffReveal(el)
+  }, [diffRevealVisible])
 
   // Subtle perfect celebration burst (no heavy confetti library).
   useEffect(() => {
@@ -2398,47 +2459,86 @@ export default function GameCanvas() {
     }
   }, [rewardBurstId, stopDiff])
 
- const shareResult = async () => {
+  const shareResult = async () => {
+    if (bestDiff === null) return
 
-  if (bestDiff === null) return
+    let text = `Orbidrop #${dayNumber}\n`
+    text += `🎯 ${target}\n\n`
 
-  let text = `Orbidrop #${dayNumber}\n`
-  text += `🎯 ${target}\n\n`
+    attemptResults.forEach(diff => {
+      let emoji = "🔴"
 
-  attemptResults.forEach(diff => {
+      if (diff === 0) emoji = "🟢"
+      else if (diff <= 2) emoji = "🟢"
+      else if (diff <= 5) emoji = "🟡"
+      else if (diff <= 10) emoji = "🟠"
 
-    let emoji = "🔴"
+      const row = emoji.repeat(Math.min(diff + 1, 5))
 
-    if (diff === 0) emoji = "🟢"
-    else if (diff <= 2) emoji = "🟢"
-    else if (diff <= 5) emoji = "🟡"
-    else if (diff <= 10) emoji = "🟠"
+      text += row + "\n"
+    })
 
-    const row = emoji.repeat(Math.min(diff + 1, 5))
+    text += `\nBest diff: ${bestDiff}`
 
-    text += row + "\n"
+    text += `\nCan you beat me?`
 
-  })
+    text += `\n\nPlay: https://orbidrop.com`
 
-  text += `\nBest diff: ${bestDiff}`
+    const title = `Orbidrop #${dayNumber}`
+    const sharePayload: ShareData = { title, text }
 
-  text += `\nCan you beat me?`
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      const allowed =
+        typeof navigator.canShare !== "function" || navigator.canShare(sharePayload)
+      if (allowed) {
+        try {
+          await navigator.share(sharePayload)
+          return
+        } catch (e) {
+          if (e instanceof DOMException && e.name === "AbortError") return
+          /* fall through to clipboard */
+        }
+      }
+    }
 
-  text += `\n\nPlay: https://orbidrop.com`
-
-  try {
-
-    await navigator.clipboard.writeText(text)
-
-    alert("Result copied! Share it with friends 🚀")
-
-  } catch {
-
-    console.log(text)
-
+    try {
+      await navigator.clipboard.writeText(text)
+      alert("Result copied! Share it with friends 🚀")
+    } catch {
+      console.log(text)
+    }
   }
 
-}
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return
+      if (e.repeat) return
+      const el = e.target as HTMLElement
+      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return
+      if (showRules || showStats) return
+      if (isCounting || isStopping) return
+      e.preventDefault()
+      if (gameOver) {
+        void shareResult()
+        return
+      }
+      if (running) stopGame()
+      else startGame()
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [
+    gameOver,
+    running,
+    isCounting,
+    isStopping,
+    isSmallScreen,
+    statsDismissed,
+    showRules,
+    showStats,
+    isEarthDropPlayerToday,
+    shareResult
+  ])
 
   const shareEarthWin = async () => {
     const diff = Math.abs(ballCount - target)
@@ -2584,8 +2684,8 @@ const revealStyle = gameFinished
     !running && !gameOver && !isCounting && !isStopping
 
   const diffStatAbs =
-    hasResultNumbers && (isCounting || gameFinished)
-      ? Math.abs(isCounting ? countDisplay - target : ballCount - target)
+    diffRevealVisible && gameFinished
+      ? Math.abs(ballCount - target)
       : null
 
   const glassShadowBase = darkMode
@@ -2975,7 +3075,7 @@ const revealStyle = gameFinished
         transition: "color 180ms ease"
       }}
     >
-      {isCounting ? countDisplay - target : gameFinished ? ballCount - target : "–"}
+      {gameFinished && diffRevealVisible ? ballCount - target : "–"}
     </div>
   </div>
 
@@ -3289,27 +3389,32 @@ const revealStyle = gameFinished
           }}
         />
 
-        {/* After last try: countdown only after user dismisses the end-of-game stats modal */}
-        {gameOver && !showStats && statsDismissed && (
+        {/* After 3rd try: show once stats modal has opened; keep until next day (gameOver clears). */}
+        {gameOver && (showStats || statsDismissed) && (
           <div
             role="status"
             aria-live="polite"
-            className="pointer-events-none absolute left-1/2 z-[4] max-w-[min(92%,280px)] -translate-x-1/2 px-3 py-1 text-center text-[10px] font-medium leading-snug tracking-wide sm:text-[11px]"
+            className="pointer-events-none absolute left-1/2 z-[6] max-w-[min(94%,300px)] -translate-x-1/2 px-4 py-2 text-center text-[12px] font-semibold leading-tight tracking-tight sm:text-[13px] sm:px-5 sm:py-2.5"
             style={{
-              top: "8%",
-              color: theme.muted2,
+              top: "6%",
+              color: theme.text,
               borderRadius: "999px",
-              background: darkMode ? "rgba(0,0,0,0.32)" : "rgba(255,255,255,0.62)",
+              background: darkMode
+                ? "linear-gradient(180deg, rgba(42,42,42,0.92) 0%, rgba(24,24,24,0.88) 100%)"
+                : "linear-gradient(180deg, rgba(255,255,255,0.97) 0%, rgba(248,250,252,0.94) 100%)",
               border: darkMode
-                ? "1px solid rgba(255,255,255,0.09)"
-                : "1px solid rgba(0,0,0,0.07)",
+                ? "1px solid rgba(255,255,255,0.14)"
+                : "1px solid rgba(0,0,0,0.1)",
               boxShadow: darkMode
-                ? "0 2px 12px rgba(0,0,0,0.25)"
-                : "0 2px 10px rgba(0,0,0,0.07)"
+                ? "0 4px 20px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06) inset"
+                : "0 4px 18px rgba(0,0,0,0.12), 0 0 0 1px rgba(255,255,255,0.8) inset"
             }}
           >
             New challenge in{" "}
-            <span className="font-semibold tabular-nums" style={{ color: theme.muted }}>
+            <span
+              className="font-bold tabular-nums tracking-wide"
+              style={{ color: "#2a9d8f", textShadow: darkMode ? "0 0 20px rgba(42,157,143,0.35)" : "none" }}
+            >
               {timeLeft || "–"}
             </span>
           </div>
@@ -3339,9 +3444,7 @@ const revealStyle = gameFinished
         onClick={() => {
           triggerActionButtonFeedback()
       if (gameOver) {
-        setStatsDismissed(false)
-        setStatsAutoOpened(true)
-        setShowStats(true)
+        void shareResult()
         return
       }
           if (running) {
@@ -3372,7 +3475,8 @@ const revealStyle = gameFinished
           width: "min(85vw, 320px)",
           maxWidth: 320,
           padding: isCompact ? "12px 20px" : "14px 24px",
-          fontSize: 20,
+          fontSize: gameOver ? (isCompact ? 15 : 17) : 20,
+          lineHeight: gameOver ? 1.2 : undefined,
           fontWeight: 700,
           border:"none",
           borderRadius:"10px",
@@ -3381,7 +3485,7 @@ const revealStyle = gameFinished
           backgroundImage: isCounting || isStopping
             ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #8b939b 0%, #6c757d 100%)"
             : gameOver
-            ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #5a8cad 0%, #457b9d 100%)"
+            ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #39b2a2 0%, #2a9d8f 100%)"
             : running
             ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #ef5a66 0%, #e63946 100%)"
             : "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #39b2a2 0%, #2a9d8f 100%)",
@@ -3407,7 +3511,13 @@ const revealStyle = gameFinished
             : "transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 120ms ease, filter 120ms ease"
         }}
       >
-        {gameOver ? "STATS" : running ? "STOP" : isStopping ? "STOP" : "DROP"}
+        {gameOver
+          ? "Share result"
+          : running
+            ? "STOP"
+            : isStopping
+              ? "STOP"
+              : "DROP"}
       </button>
 
       {gameOver && showStats && typeof document !== "undefined" && createPortal(
@@ -3431,7 +3541,6 @@ const revealStyle = gameFinished
             if (e.target !== e.currentTarget) return
             setShowStats(false)
             setStatsDismissed(true)
-            setGlassCountdownBlocked(false)
           }}
         >
 
@@ -3456,7 +3565,6 @@ const revealStyle = gameFinished
               onClick={() => {
                 setShowStats(false)
                 setStatsDismissed(true)
-                setGlassCountdownBlocked(false)
               }}
               aria-label="Close stats"
               style={{
@@ -3745,7 +3853,7 @@ const revealStyle = gameFinished
           }}
           onMouseDown={(e) => {
             if (e.target !== e.currentTarget) return
-            localStorage.setItem("orbifallRulesSeen","true")
+            localStorage.setItem(ORBIFALL_RULES_SEEN_KEY, "true")
             setShowRules(false)
           }}
         >
@@ -3771,7 +3879,7 @@ const revealStyle = gameFinished
               <h2 style={{margin:0,fontSize:"18px", color: theme.modalText}}>How Orbidrop works</h2>
               <button
                 onClick={() => {
-                  localStorage.setItem("orbifallRulesSeen","true")
+                  localStorage.setItem(ORBIFALL_RULES_SEEN_KEY, "true")
                   setShowRules(false)
                 }}
                 aria-label="Close"
@@ -3828,7 +3936,7 @@ const revealStyle = gameFinished
             <button
               onClick={() => {
 
-                localStorage.setItem("orbifallRulesSeen", "true")
+                localStorage.setItem(ORBIFALL_RULES_SEEN_KEY, "true")
                 setShowRules(false)
 
               }}
@@ -3866,7 +3974,7 @@ const revealStyle = gameFinished
                 ? "calc(10px + env(safe-area-inset-bottom))"
                 : "calc(18px + env(safe-area-inset-bottom))",
               display: "flex",
-              gap: "8px",
+              gap: "6px",
               alignItems: "center",
               zIndex: 2500,
               padding: "0 env(safe-area-inset-right) env(safe-area-inset-bottom) 0"
@@ -3877,18 +3985,20 @@ const revealStyle = gameFinished
               onClick={() => setDarkMode(prev => !prev)}
               aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
               style={{
-                width: isSmallScreen ? "34px" : "42px",
-                height: isSmallScreen ? "34px" : "42px",
+                width: isSmallScreen ? "28px" : "34px",
+                height: isSmallScreen ? "28px" : "34px",
                 borderRadius: "999px",
                 border: "none",
-                background: darkMode ? "#374151" : theme.buttonMuted,
+                background: darkMode
+                  ? hexToRgba("#374151", 0.72)
+                  : hexToRgba(theme.buttonMuted, 0.78),
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: isSmallScreen ? "14px" : "16px",
+                fontSize: isSmallScreen ? "12px" : "13px",
                 cursor: "pointer",
-                color: darkMode ? "#e5e5e5" : theme.muted,
-                boxShadow: "0 6px 16px rgba(0,0,0,0.18)"
+                color: darkMode ? "rgba(229, 229, 229, 0.92)" : theme.muted,
+                boxShadow: "0 3px 10px rgba(0,0,0,0.12)"
               }}
             >
               {darkMode ? "☀️" : "🌙"}
@@ -3907,18 +4017,20 @@ const revealStyle = gameFinished
                   : "Turn sound effects on"
               }
               style={{
-                width: isSmallScreen ? "34px" : "42px",
-                height: isSmallScreen ? "34px" : "42px",
+                width: isSmallScreen ? "28px" : "34px",
+                height: isSmallScreen ? "28px" : "34px",
                 borderRadius: "999px",
                 border: "none",
-                background: soundEnabled ? "#2a9d8f" : theme.buttonMuted,
+                background: soundEnabled
+                  ? hexToRgba("#2a9d8f", 0.82)
+                  : hexToRgba(theme.buttonMuted, 0.78),
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: isSmallScreen ? "14px" : "16px",
+                fontSize: isSmallScreen ? "12px" : "13px",
                 cursor: "pointer",
-                color: soundEnabled ? "white" : theme.muted,
-                boxShadow: "0 6px 16px rgba(0,0,0,0.18)",
+                color: soundEnabled ? "rgba(255,255,255,0.94)" : theme.muted,
+                boxShadow: "0 3px 10px rgba(0,0,0,0.12)",
                 touchAction: "manipulation",
                 WebkitTapHighlightColor: "transparent"
               }}
