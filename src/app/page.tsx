@@ -39,7 +39,7 @@ export default function Home() {
     <main className="orbifall-main orbifall-home">
       <h1 className="sr-only">Orbidrop – The Addictive Browser Game</h1>
 
-      <div className="flex w-full max-w-[100vw] flex-col items-center px-2 sm:px-3">
+      <div className="flex w-full max-w-[100vw] flex-col items-center px-1.5 sm:px-3">
         <ScaleToFit>
           <div className="orbifall-game-wrap">
             <GameCanvasLoader />
