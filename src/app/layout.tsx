@@ -107,7 +107,7 @@ export default function RootLayout({
         />
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){var t=localStorage.getItem("orbifallDarkMode");var d=window.matchMedia("(prefers-color-scheme:dark)").matches;document.documentElement.dataset.theme=t==="dark"||(t!=="light"&&d)?"dark":"light";})();`,
+            __html: `(function(){var t=localStorage.getItem("orbifallDarkMode");var d=window.matchMedia("(prefers-color-scheme:dark)").matches;var dark=t==="dark"||(t!=="light"&&d);document.documentElement.dataset.theme=dark?"dark":"light";document.documentElement.classList.toggle("dark",dark);})();`,
           }}
         />
       </head>

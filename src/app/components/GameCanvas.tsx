@@ -700,6 +700,7 @@ export default function GameCanvas() {
   useEffect(() => {
     const theme = darkMode ? "dark" : "light"
     document.documentElement.dataset.theme = theme
+    document.documentElement.classList.toggle("dark", darkMode)
     try {
       setStorageItem("orbifallDarkMode", theme)
     } catch {}
@@ -2736,7 +2737,7 @@ const revealStyle = gameFinished
     !running && !gameOver && !isCounting && !isStopping
 
   const dropButtonClassName =
-    "w-full max-w-full rounded-2xl py-4 text-base font-semibold shadow-lg transition duration-200 ease-out will-change-transform touch-manipulation " +
+    "w-full max-w-full rounded-3xl py-6 text-xl font-semibold shadow-lg transition duration-200 ease-out will-change-transform touch-manipulation " +
     (isCounting || isStopping
       ? "cursor-default bg-gradient-to-r from-slate-400 to-slate-600 text-white/90 active:scale-100 "
       : gameOver
@@ -3492,7 +3493,7 @@ const revealStyle = gameFinished
 
       </div>
 
-      <div className="mt-2 flex w-full shrink-0 justify-center px-0.5">
+      <div className="mt-px flex w-full shrink-0 justify-center px-0.5">
       <button
         className={dropButtonClassName}
         onClick={() => {

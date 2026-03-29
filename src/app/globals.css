@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Match in-app theme (dataset on <html>), not only prefers-color-scheme */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -32,8 +35,8 @@ body {
     ) !important;
 }
 
-[data-theme="dark"] html,
-[data-theme="dark"] body {
+html[data-theme="dark"],
+html[data-theme="dark"] body {
   background: radial-gradient(
       circle at 50% 30%,
       rgba(255, 255, 255, 0.07) 0%,
@@ -129,8 +132,8 @@ body:has(.orbifall-home-shell) {
   background-color: #fafafa !important;
 }
 
-[data-theme="dark"] html:has(.orbifall-home-shell),
-[data-theme="dark"] body:has(.orbifall-home-shell) {
+html[data-theme="dark"]:has(.orbifall-home-shell),
+html[data-theme="dark"] body:has(.orbifall-home-shell) {
   background-color: #0a0a0a !important;
 }
 
