@@ -24,24 +24,45 @@ const GAME = {
 } as const
 
 /**
- * Layered SFX: UI bus (start/stop) kept quiet; physics bus (collisions) a touch more present.
- * All peaks are linear gain before bus; buses scale to destination.
+ * Layered SFX: UI bus (start/stop/celebration); physics bus (collisions) — warm, tactile.
+ * Peaks are pre-bus; buses scale to destination.
  */
 const AUDIO = {
-  UI_BUS: 0.92,
-  PHYSICS_BUS: 0.52,
-  /** START / DROP — low peak, slightly longer tail so it stays in the background */
-  START_PEAK: 0.03,
-  START_MS: 0.084,
-  /** STOP — softer than before; longer settle */
-  STOP_CLICK_PEAK: 0.038,
-  STOP_CLICK_MS: 0.2,
-  /** Ball hit — scaled by impact */
-  BOUNCE_PEAK_MAX: 0.055,
-  BOUNCE_MS: 0.038,
+  UI_BUS: 0.94,
+  /** Physics SFX — keep low; per-hit gain also scaled by ball mass/radius/impact */
+  PHYSICS_BUS: 0.3,
+  /** DROP — airy lift + soft body */
+  START_PEAK: 0.042,
+  START_MS: 0.11,
+  /** STOP — warm sine layers; peaks are body loudness (very gentle) */
+  STOP_PEAK_DEFAULT: 0.013,
+  STOP_PEAK_NEAR: 0.017,
+  STOP_PEAK_PERFECT: 0.022,
+  STOP_MS_DEFAULT: 0.3,
+  STOP_MS_NEAR: 0.34,
+  STOP_MS_PERFECT: 0.4,
+  /** Ball hit — ceiling; actual peak uses impact + body physics */
+  BOUNCE_PEAK_MAX: 0.028,
+  BOUNCE_MS: 0.055,
   /** Max collision SFX per rolling second */
   BOUNCE_MAX_PER_SEC: 5
 } as const
+
+/** Matter collision → audio: kind + closing speed along normal drive pitch and timbre. */
+type BounceCollisionKind = "floor" | "wall" | "ball"
+
+type BounceAudioParams = {
+  impact01: number
+  kind: BounceCollisionKind
+  /** Closing speed along collision normal (Matter velocity units). */
+  approach: number
+  /** Primary collider radius (px); ball–ball uses geometric mean of both. */
+  radius: number
+  /** Matter body mass (or reduced mass for ball–ball). */
+  mass: number
+  /** Scalar speed: |v| of dynamic body, or relative speed for ball–ball. */
+  speed: number
+}
 
 /** Matches `ground` body in Matter (floor collision top = playfieldHeight - this). */
 const JAR_GROUND_HEIGHT = 20
@@ -551,8 +572,12 @@ export default function GameCanvas() {
   const physicsBusRef = useRef<GainNode | null>(null)
   const stopClickUntilRef = useRef<number>(0)
   const bounceHitTimesRef = useRef<number[]>([])
+  /** True while STOP settle animation runs; bounce SFX only for soft “last drops”. */
+  const isStoppingRef = useRef(false)
+  /** performance.now() when STOP began — skip harsh early collisions in slow-mo. */
+  const stopBouncePhaseStartMsRef = useRef(0)
   /** Matter collision handler keeps a stable ref so throttling / volumes stay current. */
-  const playBounceSoundRef = useRef<(impact01: number) => void>(() => {})
+  const playBounceSoundRef = useRef<(p: BounceAudioParams) => void>(() => {})
   const lastHapticAtRef = useRef<number>(0)
   const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -660,74 +685,140 @@ export default function GameCanvas() {
         divider: "rgba(0,0,0,0.06)"
       }
 
-  /** START / DROP — UI layer: muted chirp, ±5% pitch. */
+  /** START / DROP — layered lift (sine + detuned triangle) + soft “air”. */
   const playStartSound = () => {
     withAudioContext(ctx => {
       const ui = uiBusRef.current
       if (!ui) return
       const now = ctx.currentTime
-      const pitchMul = 0.95 + Math.random() * 0.1
-      const f0 = 440 * pitchMul
-      const f1 = 560 * pitchMul
+      const pm = 0.97 + Math.random() * 0.06
+      const f0 = 215 * pm
+      const f1 = 380 * pm
+      const dur = AUDIO.START_MS
 
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = "triangle"
-      osc.frequency.setValueAtTime(f0, now)
-      osc.frequency.exponentialRampToValueAtTime(Math.max(80, f1), now + 0.026)
-      osc.frequency.exponentialRampToValueAtTime(Math.max(60, 400 * pitchMul), now + 0.062)
+      const mkOsc = (type: OscillatorType, f: number, fEnd: number, peak: number, rel: number) => {
+        const osc = ctx.createOscillator()
+        const g = ctx.createGain()
+        osc.type = type
+        osc.frequency.setValueAtTime(f, now)
+        osc.frequency.exponentialRampToValueAtTime(Math.max(85, fEnd), now + dur * 0.45)
+        g.gain.setValueAtTime(0.0001, now)
+        g.gain.exponentialRampToValueAtTime(peak, now + 0.014)
+        g.gain.exponentialRampToValueAtTime(peak * rel, now + dur * 0.55)
+        g.gain.exponentialRampToValueAtTime(0.0001, now + dur)
+        osc.connect(g)
+        g.connect(ui)
+        osc.start(now)
+        osc.stop(now + dur + 0.02)
+      }
 
-      const peak = AUDIO.START_PEAK
-      gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(peak, now + 0.012)
-      gain.gain.exponentialRampToValueAtTime(peak * 0.48, now + 0.034)
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + AUDIO.START_MS)
-
-      osc.connect(gain)
-      gain.connect(ui)
-      osc.start(now)
-      osc.stop(now + AUDIO.START_MS + 0.01)
+      mkOsc("sine", f0, f1 * 0.92, AUDIO.START_PEAK * 0.55, 0.35)
+      mkOsc("triangle", f0 * 1.02, f1 * 1.08, AUDIO.START_PEAK * 0.42, 0.28)
     })
   }
 
+  type StopTier = "perfect" | "near" | "default"
+
   /**
-   * STOP — UI layer: low, soft “breath”; no stacking.
+   * STOP — warm, non-harsh: all-sine “bloom” + soft major third; triangle removed.
+   * Long linear attack, gentle pitch falloff — reads as satisfying confirmation, not a click.
    */
-  const playStopClickSound = () => {
+  const playStopClickSound = (tier: StopTier = "default") => {
     withAudioContext(ctx => {
       const ui = uiBusRef.current
       if (!ui) return
       const now = ctx.currentTime
       if (now < stopClickUntilRef.current) return
-      stopClickUntilRef.current = now + AUDIO.STOP_CLICK_MS + 0.03
 
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = "sine"
-      const fHi = 285 + Math.random() * 20
-      const fLo = 210 + Math.random() * 14
-      osc.frequency.setValueAtTime(fHi, now)
-      osc.frequency.exponentialRampToValueAtTime(Math.max(110, fLo), now + AUDIO.STOP_CLICK_MS * 0.92)
+      const ms =
+        tier === "perfect"
+          ? AUDIO.STOP_MS_PERFECT
+          : tier === "near"
+            ? AUDIO.STOP_MS_NEAR
+            : AUDIO.STOP_MS_DEFAULT
+      const bodyPeak =
+        tier === "perfect"
+          ? AUDIO.STOP_PEAK_PERFECT
+          : tier === "near"
+            ? AUDIO.STOP_PEAK_NEAR
+            : AUDIO.STOP_PEAK_DEFAULT
 
-      const peak = AUDIO.STOP_CLICK_PEAK
-      gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(peak, now + 0.038)
-      gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak * 0.2), now + 0.095)
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + AUDIO.STOP_CLICK_MS)
+      stopClickUntilRef.current = now + ms + 0.06
+      const pm = 0.992 + Math.random() * 0.016
 
-      osc.connect(gain)
-      gain.connect(ui)
-      osc.start(now)
-      osc.stop(now + AUDIO.STOP_CLICK_MS + 0.012)
+      const f0 =
+        (tier === "perfect" ? 142 : tier === "near" ? 128 : 112) * pm
+      const fThird = f0 * 1.259921 // 2^(4/12) major third — pleasant, not edgy
+      const fAir = f0 * 4 // two octaves — breathy tail (very quiet)
+
+      const attack = tier === "perfect" ? 0.078 : tier === "near" ? 0.07 : 0.062
+      const thirdMul = tier === "perfect" ? 0.44 : tier === "near" ? 0.36 : 0.28
+      const airMul = tier === "perfect" ? 0.14 : tier === "near" ? 0.1 : 0.065
+      const end = now + ms
+
+      const oscBody = ctx.createOscillator()
+      const gBody = ctx.createGain()
+      oscBody.type = "sine"
+      oscBody.frequency.setValueAtTime(f0 * 1.04, now)
+      oscBody.frequency.exponentialRampToValueAtTime(Math.max(62, f0 * 0.68), end)
+
+      gBody.gain.setValueAtTime(0.0001, now)
+      gBody.gain.linearRampToValueAtTime(bodyPeak, now + attack)
+      gBody.gain.exponentialRampToValueAtTime(Math.max(0.0001, bodyPeak * 0.38), now + ms * 0.38)
+      gBody.gain.exponentialRampToValueAtTime(0.0001, end)
+
+      const oscThird = ctx.createOscillator()
+      const gThird = ctx.createGain()
+      oscThird.type = "sine"
+      const tThird = now + 0.018
+      oscThird.frequency.setValueAtTime(fThird, tThird)
+      oscThird.frequency.exponentialRampToValueAtTime(Math.max(95, fThird * 0.82), end)
+
+      gThird.gain.setValueAtTime(0.0001, tThird)
+      gThird.gain.linearRampToValueAtTime(bodyPeak * thirdMul, tThird + 0.058)
+      gThird.gain.exponentialRampToValueAtTime(0.0001, tThird + ms * 0.78)
+
+      const oscAir = ctx.createOscillator()
+      const gAir = ctx.createGain()
+      oscAir.type = "sine"
+      const tAir = now + 0.028
+      oscAir.frequency.setValueAtTime(fAir, tAir)
+      oscAir.frequency.exponentialRampToValueAtTime(fAir * 0.72, now + Math.min(0.2, ms * 0.45))
+
+      gAir.gain.setValueAtTime(0.0001, tAir)
+      gAir.gain.linearRampToValueAtTime(bodyPeak * airMul, tAir + 0.05)
+      gAir.gain.exponentialRampToValueAtTime(0.0001, tAir + 0.24)
+
+      oscBody.connect(gBody)
+      gBody.connect(ui)
+      oscThird.connect(gThird)
+      gThird.connect(ui)
+      oscAir.connect(gAir)
+      gAir.connect(ui)
+
+      oscBody.start(now)
+      oscThird.start(tThird)
+      oscAir.start(tAir)
+      oscBody.stop(end + 0.03)
+      oscThird.stop(end + 0.03)
+      oscAir.stop(now + 0.32)
     })
   }
 
   /**
-   * Ball collision — physics bus: subtle, throttled (max/sec), pitch & gain jitter, impact-scaled.
+   * Ball collision — dual partials; pitch/decay from closing speed + kind (floor vs wall vs ball–ball).
    */
-  const playBounceSound = (impact01: number) => {
+  const playBounceSound = (p: BounceAudioParams) => {
     if (!soundEnabledRef.current) return
-    if (impact01 < 0.12) return
+    const { impact01, kind, approach, radius, mass, speed } = p
+    if (impact01 < 0.085) return
+
+    if (isStoppingRef.current) {
+      const t = performance.now()
+      if (t - stopBouncePhaseStartMsRef.current < 95) return
+      if (impact01 > 0.38 || approach > 4.4) return
+      if (kind === "ball" && (impact01 > 0.24 || approach > 1.85)) return
+    }
 
     const tMs = performance.now()
     const win = bounceHitTimesRef.current
@@ -739,59 +830,156 @@ export default function GameCanvas() {
       const bus = physicsBusRef.current
       if (!bus) return
       const now = ctx.currentTime
-      const pitchMul = 0.95 + Math.random() * 0.1
-      const volMul = 0.88 + Math.random() * 0.12
-      const base = (195 + Math.random() * 95) * pitchMul
+      const pitchMul = 0.985 + Math.random() * 0.03
+      const volMul = 0.92 + Math.random() * 0.06
 
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = "sine"
-      osc.frequency.setValueAtTime(base, now)
-      osc.frequency.exponentialRampToValueAtTime(base * 0.68, now + AUDIO.BOUNCE_MS * 0.75)
+      // Per-body physics: larger / heavier → lower pitch, slightly longer ring.
+      const r = Math.max(5.5, Math.min(26, radius))
+      const radiusPitchMul = Math.pow(11 / r, 0.38)
+      const massPitchMul = Math.pow(Math.max(0.008, mass) / 0.22, -0.06)
+      const speedNorm = Math.min(1, speed / 22)
 
+      // Map closing speed along normal → 0..1 (gentle curve).
+      const approachNorm = Math.min(1, approach / 24)
+
+      let baseMin: number
+      let baseSpan: number
+      let partialMul: number
+      let triGain: number
+      let decayBody: number
+      if (kind === "floor") {
+        baseMin = 82
+        baseSpan = 118
+        partialMul = 1.48
+        triGain = 0.12
+        decayBody = 0.58
+      } else if (kind === "wall") {
+        baseMin = 108
+        baseSpan = 148
+        partialMul = 1.58
+        triGain = 0.14
+        decayBody = 0.52
+      } else {
+        baseMin = 128
+        baseSpan = 168
+        partialMul = 1.68
+        triGain = 0.16
+        decayBody = 0.48
+      }
+
+      let base =
+        (baseMin + approachNorm * baseSpan + impact01 * 14 + speedNorm * 18) *
+        pitchMul *
+        radiusPitchMul *
+        massPitchMul
+
+      base = Math.max(55, Math.min(520, base))
+
+      const dur =
+        AUDIO.BOUNCE_MS *
+        (0.68 + (1 - impact01) * 0.32 + (1 - approachNorm) * 0.1 + (r / 11 - 1) * 0.06)
+
+      // Loudness ~ impact energy proxy: sqrt(m)*|v| and normal impulse; keep subtle.
+      const energy01 = Math.min(
+        1,
+        0.35 * impact01 + 0.28 * approachNorm + 0.22 * speedNorm + 0.15 * Math.sqrt(mass / 0.35)
+      )
       const peak = Math.min(
         AUDIO.BOUNCE_PEAK_MAX,
-        AUDIO.BOUNCE_PEAK_MAX * (0.35 + 0.65 * impact01) * volMul
+        AUDIO.BOUNCE_PEAK_MAX * (0.28 + 0.72 * energy01) * volMul * (0.82 + 0.18 * (r / 11))
       )
-      gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), now + 0.003)
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + AUDIO.BOUNCE_MS)
 
-      osc.connect(gain)
-      gain.connect(bus)
-      osc.start(now)
-      osc.stop(now + AUDIO.BOUNCE_MS + 0.008)
+      const body = ctx.createOscillator()
+      const gBody = ctx.createGain()
+      body.type = "sine"
+      body.frequency.setValueAtTime(base, now)
+      body.frequency.exponentialRampToValueAtTime(
+        Math.max(48, base * decayBody),
+        now + dur * 0.82
+      )
+
+      const part = ctx.createOscillator()
+      const gPart = ctx.createGain()
+      part.type = "triangle"
+      part.frequency.setValueAtTime(base * partialMul, now)
+      part.frequency.exponentialRampToValueAtTime(
+        Math.max(70, base * (partialMul * 0.45)),
+        now + dur * 0.72
+      )
+
+      gBody.gain.setValueAtTime(0.0001, now)
+      gBody.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak * 0.92), now + 0.004)
+      gBody.gain.exponentialRampToValueAtTime(0.0001, now + dur)
+
+      gPart.gain.setValueAtTime(0.0001, now)
+      gPart.gain.exponentialRampToValueAtTime(
+        Math.max(0.0002, peak * triGain),
+        now + 0.0025
+      )
+      gPart.gain.exponentialRampToValueAtTime(0.0001, now + dur * 0.88)
+
+      body.connect(gBody)
+      gBody.connect(bus)
+      part.connect(gPart)
+      gPart.connect(bus)
+      body.start(now)
+      part.start(now)
+      body.stop(now + dur + 0.012)
+      part.stop(now + dur + 0.012)
     })
   }
 
   playBounceSoundRef.current = playBounceSound
 
-  /** Result sting — UI layer, slightly softer than before */
-  const playSuccessSound = () => {
+  /**
+   * Close / perfect result — major pentatonic sparkle (perfect) or warm triad (close).
+   */
+  const playResultSting = (diff: number, isPerfect: boolean) => {
     withAudioContext(ctx => {
       const ui = uiBusRef.current
       if (!ui) return
       const now = ctx.currentTime
-      const pitchMul = 0.97 + Math.random() * 0.06
-      const freqs = [660 * pitchMul, 880 * pitchMul, 990 * pitchMul]
-      const notePeak = 0.052
+      const pm = 0.985 + Math.random() * 0.03
 
-      freqs.forEach((f, i) => {
-        const osc = ctx.createOscillator()
-        const gain = ctx.createGain()
-        osc.type = "triangle"
-        osc.frequency.setValueAtTime(f, now + i * 0.06)
+      if (isPerfect) {
+        // Lower-register major lift + soft sparkle (less shrill than prior C6 band)
+        const freqs = [261.63, 329.63, 392.0, 523.25, 1046.5].map(f => f * pm)
+        const peaks = [0.088, 0.08, 0.074, 0.092, 0.038]
+        freqs.forEach((f, i) => {
+          const osc = ctx.createOscillator()
+          const g = ctx.createGain()
+          osc.type = i === 4 ? "sine" : "triangle"
+          const t0 = now + i * 0.038
+          osc.frequency.setValueAtTime(f, t0)
+          g.gain.setValueAtTime(0.0001, t0)
+          g.gain.exponentialRampToValueAtTime(peaks[i] ?? 0.06, t0 + 0.012 + i * 0.004)
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.28 + i * 0.02)
+          osc.connect(g)
+          g.connect(ui)
+          osc.start(t0)
+          osc.stop(t0 + 0.35)
+        })
+        return
+      }
 
-        const t0 = now + i * 0.06
-        gain.gain.setValueAtTime(0.0001, t0)
-        gain.gain.exponentialRampToValueAtTime(notePeak, t0 + 0.01)
-        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12)
-
-        osc.connect(gain)
-        gain.connect(ui)
-        osc.start(t0)
-        osc.stop(t0 + 0.14)
-      })
+      if (diff <= 3) {
+        const freqs = [293.66, 369.99, 440.0].map(f => f * pm)
+        const notePeak = 0.064
+        freqs.forEach((f, i) => {
+          const osc = ctx.createOscillator()
+          const g = ctx.createGain()
+          osc.type = "sine"
+          const t0 = now + i * 0.055
+          osc.frequency.setValueAtTime(f, t0)
+          g.gain.setValueAtTime(0.0001, t0)
+          g.gain.exponentialRampToValueAtTime(notePeak * (1 - i * 0.08), t0 + 0.014)
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2)
+          osc.connect(g)
+          g.connect(ui)
+          osc.start(t0)
+          osc.stop(t0 + 0.22)
+        })
+      }
     })
   }
 
@@ -1181,34 +1369,99 @@ export default function GameCanvas() {
     Runner.run(runner, engine)
     Render.run(render)
 
+    const isDecor = (b: Matter.Body) =>
+      Boolean((b as Matter.Body & { orbifallIdleDecor?: boolean }).orbifallIdleDecor)
+
+    const circleRadiusPx = (b: Matter.Body) =>
+      typeof b.circleRadius === "number" && b.circleRadius > 0 ? b.circleRadius : 11
+
     const onCollisionStart = (event: Matter.IEventCollision<Matter.Engine>) => {
       const pairs = event.pairs || []
+      let best: BounceAudioParams | null = null
+
+      const consider = (candidate: BounceAudioParams) => {
+        if (!best || candidate.impact01 > best.impact01) best = candidate
+      }
+
       for (let i = 0; i < pairs.length; i++) {
         const pair = pairs[i]
         const { bodyA, bodyB } = pair
-        const dynamic = bodyA === ground ? bodyB : bodyB === ground ? bodyA : null
-        if (!dynamic || dynamic.isStatic) continue
-        if ((dynamic as Matter.Body & { orbifallIdleDecor?: boolean }).orbifallIdleDecor) continue
-        // No sound for sleeping / settled piles — only real impacts while moving.
-        if (dynamic.isSleeping) continue
-        const { x: vx, y: vy } = dynamic.velocity
-        const speedSq = vx * vx + vy * vy
-        if (speedSq < 2.56) continue
-        const speed = Math.sqrt(speedSq)
         const collision = pair.collision
-        let approach = speed * 0.35
-        if (collision?.normal) {
-          const nx = collision.normal.x
-          const ny = collision.normal.y
-          approach = Math.abs(vx * nx + vy * ny)
-          if (approach < 0.85 && speedSq < 12) continue
-        } else if (speedSq < 12) {
+        if (!collision?.normal) continue
+
+        const nx = collision.normal.x
+        const ny = collision.normal.y
+
+        if (isDecor(bodyA) || isDecor(bodyB)) continue
+
+        // Ball–ball: relative velocity along normal (closing speed).
+        if (!bodyA.isStatic && !bodyB.isStatic) {
+          if (bodyA.isSleeping && bodyB.isSleeping) continue
+          const rvx = bodyB.velocity.x - bodyA.velocity.x
+          const rvy = bodyB.velocity.y - bodyA.velocity.y
+          const relSpeed = Math.sqrt(rvx * rvx + rvy * rvy)
+          if (relSpeed < 1.15) continue
+          const approach = Math.abs(rvx * nx + rvy * ny)
+          if (approach < 0.3 && relSpeed < 3.5) continue
+          const impact01 = Math.min(1, approach * 0.17 + relSpeed * 0.036)
+          if (impact01 < 0.07) continue
+          const rA = circleRadiusPx(bodyA)
+          const rB = circleRadiusPx(bodyB)
+          const radius = Math.sqrt(rA * rB)
+          const mass =
+            (bodyA.mass * bodyB.mass) / Math.max(1e-9, bodyA.mass + bodyB.mass)
+          consider({
+            impact01,
+            kind: "ball",
+            approach,
+            radius,
+            mass,
+            speed: relSpeed
+          })
           continue
         }
-        const impact01 = Math.min(1, approach * 0.22 + speed * 0.045)
-        playBounceSoundRef.current(impact01)
-        break
+
+        const staticB = bodyA.isStatic ? bodyA : bodyB.isStatic ? bodyB : null
+        const dynamic = bodyA.isStatic ? bodyB : bodyB.isStatic ? bodyA : null
+        if (!staticB || !dynamic || dynamic.isStatic) continue
+        if (isDecor(dynamic)) continue
+        if (dynamic.isSleeping) continue
+
+        const { x: vx, y: vy } = dynamic.velocity
+        const speedSq = vx * vx + vy * vy
+        if (speedSq < 2.25) continue
+        const speed = Math.sqrt(speedSq)
+        const approach = Math.abs(vx * nx + vy * ny)
+        if (approach < 0.72 && speedSq < 10) continue
+
+        const impact01 = Math.min(1, approach * 0.19 + speed * 0.04)
+        if (impact01 < 0.07) continue
+
+        const radius = circleRadiusPx(dynamic)
+        const mass = dynamic.mass
+
+        if (staticB === ground) {
+          consider({
+            impact01,
+            kind: "floor",
+            approach,
+            radius,
+            mass,
+            speed
+          })
+        } else if (staticB === leftWall || staticB === rightWall) {
+          consider({
+            impact01,
+            kind: "wall",
+            approach,
+            radius,
+            mass,
+            speed
+          })
+        }
       }
+
+      if (best) playBounceSoundRef.current(best)
     }
 
     Matter.Events.on(engine, "collisionStart", onCollisionStart)
@@ -1668,7 +1921,7 @@ export default function GameCanvas() {
     else if (diff <= 3) triggerHaptic("near")
     else triggerHaptic("stop")
 
-    playStopClickSound()
+    playStopClickSound(isPerfect ? "perfect" : diff <= 3 ? "near" : "default")
 
     // Smooth slow-down -> settle -> reveal
     const rampDownMs = 175 // 150-250ms target
@@ -1677,6 +1930,8 @@ export default function GameCanvas() {
     const revealAtMs = rampDownMs + settleHoldMs
     const settleBoostMs = 120
 
+    stopBouncePhaseStartMsRef.current = performance.now()
+    isStoppingRef.current = true
     setIsStopping(true)
     setRunning(false)
     setStopImpact(true)
@@ -1897,8 +2152,7 @@ export default function GameCanvas() {
       if (!isPerfect && diff <= 5) setRewardBurstId(prev => prev + 1)
 
       if (diff <= 3) {
-        playSuccessSound()
-        if (isPerfect) window.setTimeout(() => playSuccessSound(), 70)
+        playResultSting(diff, isPerfect)
       }
 
       // Visual reward only for decent results (diff <= 5).
@@ -1908,6 +2162,7 @@ export default function GameCanvas() {
       window.setTimeout(() => {
         setScoreReveal(false)
         setStopPulse(false)
+        isStoppingRef.current = false
         setIsStopping(false)
       }, popMs)
 
