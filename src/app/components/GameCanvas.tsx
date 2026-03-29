@@ -1747,6 +1747,15 @@ export default function GameCanvas() {
             setAttempt(nextSlot)
             if (nextSlot > GAME.maxAttempts) setGlassCountdownBlocked(true)
 
+            void fetch(`/api/earth-winner?date=${encodeURIComponent(todayKey)}`, {
+              credentials: "include"
+            })
+              .then(r => r.json())
+              .then(ew => {
+                if (ew?.isWinner === true) setIsEarthDropPlayerToday(true)
+              })
+              .catch(() => {})
+
             if (typeof data.bestDiff === "number") {
               setBestDiff(prev =>
                 prev === null ? data.bestDiff : Math.min(prev, data.bestDiff as number)

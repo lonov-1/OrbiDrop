@@ -9,6 +9,12 @@ import {
 
 export const dynamic = "force-dynamic"
 
+/**
+ * Daily global Earth: one `earth_winners` row per `day`. The winner is chosen uniformly at
+ * random from players who have at least one `player_daily_attempts` row for that `day`
+ * (completed STOP / submitted attempt). If nobody has submitted yet, no row is inserted;
+ * clients should call again after a successful `/api/daily-submit-attempt`.
+ */
 function isUniqueViolation(err: { code?: string; message?: string }) {
   if (err.code === "23505") return true
   const m = (err.message ?? "").toLowerCase()
@@ -59,20 +65,30 @@ export async function GET(req: Request) {
       })
     }
 
-    const { data: players, error: playersErr } = await supabase
-      .from("player_profiles")
+    const { data: attemptRows, error: attemptsErr } = await supabase
+      .from("player_daily_attempts")
       .select("player_id")
+      .eq("day", day)
 
-    if (playersErr) {
-      return j({ error: playersErr.message, code: playersErr.code }, { status: 500 })
+    if (attemptsErr) {
+      return j({ error: attemptsErr.message, code: attemptsErr.code }, { status: 500 })
     }
 
-    const pool = (players ?? [])
-      .map(p => p.player_id)
-      .filter((id): id is string => typeof id === "string" && id.length > 0)
+    const pool: string[] = []
+    const seen = new Set<string>()
+    for (const row of attemptRows ?? []) {
+      const id = row.player_id
+      if (typeof id === "string" && id.length > 0 && !seen.has(id)) {
+        seen.add(id)
+        pool.push(id)
+      }
+    }
 
-    const winnerPlayerId =
-      pool.length === 0 ? playerId : pool[randomInt(0, pool.length)]!
+    if (pool.length === 0) {
+      return j({ isWinner: false, winnerPending: true })
+    }
+
+    const winnerPlayerId = pool[randomInt(0, pool.length)]!
 
     const { error: insertErr } = await supabase.from("earth_winners").insert({
       day,
