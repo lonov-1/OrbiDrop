@@ -4036,8 +4036,8 @@ const revealStyle = gameFinished
                 ? "calc(10px + env(safe-area-inset-right))"
                 : "calc(14px + env(safe-area-inset-right))",
               bottom: isSmallScreen
-                ? "calc(88px + env(safe-area-inset-bottom))"
-                : "calc(32px + env(safe-area-inset-bottom))",
+                ? "calc(64px + env(safe-area-inset-bottom))"
+                : "calc(28px + env(safe-area-inset-bottom))",
               display: "flex",
               gap: "6px",
               alignItems: "center",

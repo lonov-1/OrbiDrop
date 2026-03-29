@@ -7,7 +7,7 @@ const FRAME_HEIGHT = 960
 const MAX_WIDTH = 430
 
 /** Fixed footer link bar — subtract from visible height when fitting scale (px). */
-const MOBILE_FOOTER_BAR_PX = 46
+const MOBILE_FOOTER_BAR_PX = 32
 
 function computeScale(): number {
   if (typeof window === "undefined") return 1

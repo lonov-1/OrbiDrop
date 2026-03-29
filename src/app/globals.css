@@ -95,7 +95,7 @@ body {
   background: transparent;
   overflow-x: hidden;
   overflow-y: visible;
-  --orbifall-game-bottom-pad: calc(40px + env(safe-area-inset-bottom, 0px));
+  --orbifall-game-bottom-pad: calc(32px + env(safe-area-inset-bottom, 0px));
 }
 
 /* Legal pages need internal scrolling because html/body are locked. */
@@ -129,6 +129,19 @@ body:has(.orbifall-home-shell) {
   overflow-y: auto;
 }
 
+/* HomeBodyScroll — same as :has() rules; works when :has() is missing or unreliable */
+html.orbifall-home-scroll,
+body.orbifall-home-scroll {
+  height: auto;
+  min-height: 100%;
+  min-height: 100dvh;
+}
+
+body.orbifall-home-scroll {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 /*
  * Site link bar: docked to the bottom of the viewport (above home indicator).
  * Theme/sound FABs stay above (higher z-index). Game column uses --orbifall-game-bottom-pad.
@@ -153,17 +166,17 @@ body:has(.orbifall-home-shell) {
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  column-gap: 0.2rem;
-  row-gap: 0.1rem;
-  padding: 0.35rem 0.75rem;
+  column-gap: 0.15rem;
+  row-gap: 0.06rem;
+  padding: 0.22rem 0.5rem;
   margin: 0;
   border-radius: 0;
   border: none;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 -2px 14px rgba(0, 0, 0, 0.04);
-  font-size: 0.5625rem;
-  line-height: 1.2;
+  box-shadow: 0 -1px 10px rgba(0, 0, 0, 0.035);
+  font-size: 0.5rem;
+  line-height: 1.15;
   letter-spacing: 0.03em;
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
@@ -207,7 +220,7 @@ body:has(.orbifall-home-shell) {
     height: auto !important;
     max-height: none !important;
     align-items: stretch !important;
-    --orbifall-game-bottom-pad: calc(44px + env(safe-area-inset-bottom, 0px));
+    --orbifall-game-bottom-pad: calc(28px + env(safe-area-inset-bottom, 0px));
   }
 
   .orbifall-home-shell .orbifall-game-wrap {
@@ -217,21 +230,21 @@ body:has(.orbifall-home-shell) {
   }
 
   .orbifall-site-footer-inner {
-    font-size: 0.75rem; /* 12px — readable on phone */
-    line-height: 1.35;
-    padding: 0.5rem 0.7rem;
-    min-height: 2.875rem;
+    font-size: 0.625rem;
+    line-height: 1.2;
+    padding: 0.2rem 0.4rem;
+    min-height: 0;
     box-sizing: border-box;
-    column-gap: 0.4rem;
-    row-gap: 0.35rem;
+    column-gap: 0.18rem;
+    row-gap: 0.08rem;
     align-content: center;
   }
 
   .orbifall-site-footer-inner a {
-    padding: 0.35rem 0.28rem;
+    padding: 0.1rem 0.14rem;
     display: inline-flex;
     align-items: center;
-    opacity: 0.72;
+    opacity: 0.68;
   }
 }
 

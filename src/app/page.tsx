@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import Link from "next/link"
 import GameCanvasLoader from "./components/GameCanvasLoader"
+import HomeBodyScroll from "./components/HomeBodyScroll"
 import ScaleToFit from "./components/ScaleToFit"
 
 export const metadata: Metadata = {
@@ -37,6 +38,7 @@ function SiteFooterLinks() {
 export default function Home() {
   return (
     <main className="orbifall-home-shell">
+      <HomeBodyScroll />
       <h1 className="sr-only">Orbidrop – The Addictive Browser Game</h1>
 
       <div className="flex w-full max-w-[100vw] flex-col items-center px-1.5 sm:px-3">
