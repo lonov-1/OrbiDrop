@@ -12,24 +12,47 @@ export const metadata: Metadata = {
 
 function SiteFooterLinks() {
   const sep = (
-    <span className="orbifall-site-footer-sep" aria-hidden>
+    <span className="mx-0.5 select-none opacity-35 font-light" aria-hidden>
       ·
     </span>
   )
 
   return (
-    <footer className="orbifall-site-footer" role="contentinfo">
+    <footer
+      className="pointer-events-none fixed bottom-0 left-0 right-0 z-[1200] flex justify-center pb-[env(safe-area-inset-bottom)]"
+      role="contentinfo"
+    >
       <nav
-        className="orbifall-site-footer-inner text-[var(--foreground)]"
+        className="pointer-events-auto flex w-full max-w-full flex-wrap items-center justify-center gap-x-0.5 gap-y-px border-t border-black/[0.06] bg-white/65 px-2 py-0.5 text-center text-[10px] font-normal leading-tight text-neutral-400 opacity-[0.65] shadow-[0_-1px_8px_rgba(0,0,0,0.04)] backdrop-blur-sm dark:border-white/[0.07] dark:bg-neutral-950/72 dark:text-neutral-500 dark:shadow-[0_-2px_14px_rgba(0,0,0,0.35)]"
         aria-label="Site links"
       >
-        <Link href="/links">Links &amp; guide</Link>
+        <Link
+          href="/links"
+          className="rounded px-0.5 py-px text-inherit no-underline opacity-80 hover:opacity-100 hover:underline"
+        >
+          Links &amp; guide
+        </Link>
         {sep}
-        <Link href="/imprint">Imprint</Link>
+        <Link
+          href="/imprint"
+          className="rounded px-0.5 py-px text-inherit no-underline opacity-80 hover:opacity-100 hover:underline"
+        >
+          Imprint
+        </Link>
         {sep}
-        <Link href="/privacy">Privacy Policy</Link>
+        <Link
+          href="/privacy"
+          className="rounded px-0.5 py-px text-inherit no-underline opacity-80 hover:opacity-100 hover:underline"
+        >
+          Privacy Policy
+        </Link>
         {sep}
-        <Link href="/terms">Terms of Use</Link>
+        <Link
+          href="/terms"
+          className="rounded px-0.5 py-px text-inherit no-underline opacity-80 hover:opacity-100 hover:underline"
+        >
+          Terms of Use
+        </Link>
       </nav>
     </footer>
   )
@@ -37,16 +60,22 @@ function SiteFooterLinks() {
 
 export default function Home() {
   return (
-    <main className="orbifall-home-shell">
+    <main
+      className={
+        "orbifall-home-shell box-border flex min-h-[100dvh] flex-col px-2 " +
+        "pt-[max(4px,env(safe-area-inset-top))] " +
+        "pb-[calc(24px+env(safe-area-inset-bottom))]"
+      }
+    >
       <HomeBodyScroll />
       <h1 className="sr-only">Orbidrop – The Addictive Browser Game</h1>
 
-      <div className="flex w-full max-w-[100vw] flex-col items-center px-1.5 sm:px-3">
-        <ScaleToFit>
-          <div className="orbifall-game-wrap">
+      <div className="flex min-h-0 w-full flex-1 flex-col">
+        <div className="mx-auto flex min-h-0 w-full max-w-[420px] flex-1 flex-col justify-center">
+          <ScaleToFit>
             <GameCanvasLoader />
-          </div>
-        </ScaleToFit>
+          </ScaleToFit>
+        </div>
       </div>
 
       <SiteFooterLinks />

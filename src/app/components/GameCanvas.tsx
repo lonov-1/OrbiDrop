@@ -2807,7 +2807,7 @@ const revealStyle = gameFinished
       {/* Unified top control panel — dense column, capped width (centered) */}
       <div
         className={
-          "mx-auto mb-1 flex w-full max-w-md flex-col gap-1.5 rounded-2xl border p-2 max-[480px]:mb-0.5 max-[480px]:gap-1 max-[480px]:rounded-xl max-[480px]:px-1.5 max-[480px]:py-1.5 sm:mb-1.5 sm:gap-2 sm:p-2.5 " +
+          "mx-auto mb-1 flex w-full max-w-md flex-col gap-1.5 rounded-2xl border p-2 max-[480px]:mb-0 max-[480px]:gap-0.5 max-[480px]:rounded-lg max-[480px]:px-1 max-[480px]:py-1 sm:mb-1.5 sm:gap-2 sm:p-2.5 " +
           (darkMode
             ? "border-white/[0.07] bg-[rgba(34,34,36,0.94)] shadow-[0_4px_20px_rgba(0,0,0,0.26),inset_0_1px_0_rgba(255,255,255,0.05)]"
             : "border-black/[0.055] bg-white/[0.96] shadow-[0_4px_18px_rgba(0,0,0,0.06),inset_0_1px_0_rgba(255,255,255,0.88)]")
@@ -2815,7 +2815,7 @@ const revealStyle = gameFinished
       >
         {/* Header: title + streak/actions on one row */}
         <div
-          className="flex min-h-[24px] items-center justify-between gap-1.5 text-[13px] font-semibold leading-none sm:min-h-[26px] sm:gap-2 sm:text-sm"
+          className="flex min-h-[24px] max-[480px]:min-h-[20px] items-center justify-between gap-1.5 text-[13px] font-semibold leading-none max-[480px]:gap-1 max-[480px]:text-[12px] sm:min-h-[26px] sm:gap-2 sm:text-sm"
           style={{ color: theme.text }}
         >
           <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
@@ -2840,8 +2840,11 @@ const revealStyle = gameFinished
               Orbidrop #{dayNumber}
             </span>
           </div>
-          <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
-            <div className="text-[13px] font-semibold sm:text-sm" style={{ color: theme.muted }}>
+          <div className="flex shrink-0 items-center gap-1 sm:gap-1.5 max-[480px]:gap-0.5">
+            <div
+              className="text-[13px] font-semibold max-[480px]:text-[12px] sm:text-sm"
+              style={{ color: theme.muted }}
+            >
               🔥 {stats.streak}
             </div>
             {gameOver && (
@@ -2910,8 +2913,8 @@ const revealStyle = gameFinished
             <div
               className={
                 (running && !isCounting && !gameOver ? "orbifall-target--live " : "") +
-                "flex w-full items-center justify-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap rounded-full border px-5 py-2 font-extrabold leading-none tracking-tight sm:px-6 sm:py-2.5 " +
-                (isCompact ? "text-base sm:text-[17px]" : "text-[17px] sm:text-lg") +
+                "flex w-full items-center justify-center gap-2 overflow-hidden text-ellipsis whitespace-nowrap rounded-full border px-5 py-2 font-extrabold leading-none tracking-tight max-[480px]:gap-1.5 max-[480px]:px-3 max-[480px]:py-1 sm:px-6 sm:py-2.5 " +
+                (isCompact ? "text-[15px] sm:text-[17px]" : "text-[17px] sm:text-lg") +
                 " " +
                 (darkMode
                   ? "border-white/[0.11] text-neutral-100"
@@ -3016,7 +3019,7 @@ const revealStyle = gameFinished
         {/* Stats — equal thirds, tight to rounds */}
         <div
           className={
-            "mt-0.5 grid w-full grid-cols-3 gap-1 rounded-xl p-1 sm:gap-1.5 sm:p-1.5 " +
+            "mt-0.5 grid w-full grid-cols-3 gap-1 rounded-xl p-1 max-[480px]:mt-0 max-[480px]:gap-0.5 max-[480px]:p-0.5 sm:gap-1.5 sm:p-1.5 " +
             (darkMode
               ? "border border-white/[0.06] bg-black/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]"
               : "border border-black/[0.05] bg-black/[0.028] shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]") +
@@ -3030,7 +3033,7 @@ const revealStyle = gameFinished
   {/* RESULT */}
 
   <div
-    className="min-w-0 flex min-h-[34px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-center text-[11px] leading-none ring-1 ring-inset ring-black/[0.05] sm:min-h-[36px] sm:gap-1 sm:px-2.5 sm:py-2 sm:text-xs dark:ring-white/[0.07]"
+    className="min-w-0 flex min-h-[34px] max-[480px]:min-h-[28px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-center text-[11px] leading-none ring-1 ring-inset ring-black/[0.05] max-[480px]:gap-px max-[480px]:px-1 max-[480px]:py-1 sm:min-h-[36px] sm:gap-1 sm:px-2.5 sm:py-2 sm:text-xs dark:ring-white/[0.07]"
     style={{
       background: darkMode
         ? "linear-gradient(to bottom, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 58%)," +
@@ -3064,7 +3067,10 @@ const revealStyle = gameFinished
         "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
     }}
   >
-    <div className="text-[10px] leading-none sm:text-[11px]" style={{ color: theme.muted2 }}>
+    <div
+      className="text-[10px] leading-none max-[480px]:text-[9px] sm:text-[11px]"
+      style={{ color: theme.muted2 }}
+    >
       Result
     </div>
     <div
@@ -3088,7 +3094,7 @@ const revealStyle = gameFinished
   {/* DIFF */}
 
   <div
-    className="min-w-0 flex min-h-[34px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-center text-[11px] leading-none ring-1 ring-inset ring-black/[0.05] sm:min-h-[36px] sm:gap-1 sm:px-2.5 sm:py-2 sm:text-xs dark:ring-white/[0.07]"
+    className="min-w-0 flex min-h-[34px] max-[480px]:min-h-[28px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-center text-[11px] leading-none ring-1 ring-inset ring-black/[0.05] max-[480px]:gap-px max-[480px]:px-1 max-[480px]:py-1 sm:min-h-[36px] sm:gap-1 sm:px-2.5 sm:py-2 sm:text-xs dark:ring-white/[0.07]"
     style={{
       background: darkMode
         ? "linear-gradient(to bottom, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 58%)," +
@@ -3122,7 +3128,10 @@ const revealStyle = gameFinished
         "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
     }}
   >
-    <div className="text-[10px] leading-none sm:text-[11px]" style={{ color: theme.muted2 }}>
+    <div
+      className="text-[10px] leading-none max-[480px]:text-[9px] sm:text-[11px]"
+      style={{ color: theme.muted2 }}
+    >
       Diff
     </div>
     <div
@@ -3147,7 +3156,7 @@ const revealStyle = gameFinished
   {/* BEST */}
 
   <div
-    className="min-w-0 flex min-h-[34px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-center text-[11px] leading-none ring-1 ring-inset ring-black/[0.05] sm:min-h-[36px] sm:gap-1 sm:px-2.5 sm:py-2 sm:text-xs dark:ring-white/[0.07]"
+    className="min-w-0 flex min-h-[34px] max-[480px]:min-h-[28px] flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1.5 text-center text-[11px] leading-none ring-1 ring-inset ring-black/[0.05] max-[480px]:gap-px max-[480px]:px-1 max-[480px]:py-1 sm:min-h-[36px] sm:gap-1 sm:px-2.5 sm:py-2 sm:text-xs dark:ring-white/[0.07]"
     style={{
       background: darkMode
         ? "linear-gradient(to bottom, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 58%)," +
@@ -3160,7 +3169,10 @@ const revealStyle = gameFinished
         "background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease"
     }}
   >
-    <div className="text-[10px] leading-none sm:text-[11px]" style={{ color: theme.muted2 }}>
+    <div
+      className="text-[10px] leading-none max-[480px]:text-[9px] sm:text-[11px]"
+      style={{ color: theme.muted2 }}
+    >
       Best
     </div>
     <div
@@ -3536,10 +3548,10 @@ const revealStyle = gameFinished
         }}
         disabled={isCounting || isStopping}
         style={{
-          marginTop: isCompact ? "0px" : "2px",
+          marginTop: isCompact ? 10 : 2,
           width: "min(85vw, 320px)",
           maxWidth: 320,
-          padding: isCompact ? "12px 20px" : "14px 24px",
+          padding: isCompact ? "10px 18px" : "14px 24px",
           fontSize: gameOver ? (isCompact ? 15 : 17) : 20,
           lineHeight: gameOver ? 1.2 : undefined,
           fontWeight: 700,
@@ -4036,8 +4048,8 @@ const revealStyle = gameFinished
                 ? "calc(10px + env(safe-area-inset-right))"
                 : "calc(14px + env(safe-area-inset-right))",
               bottom: isSmallScreen
-                ? "calc(64px + env(safe-area-inset-bottom))"
-                : "calc(28px + env(safe-area-inset-bottom))",
+                ? "calc(52px + env(safe-area-inset-bottom))"
+                : "calc(26px + env(safe-area-inset-bottom))",
               display: "flex",
               gap: "6px",
               alignItems: "center",

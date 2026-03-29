@@ -1,49 +1,38 @@
 "use client"
 
-import { useLayoutEffect, useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 
 const FRAME_WIDTH = 390
 const FRAME_HEIGHT = 960
-const MAX_WIDTH = 430
 
-/** Fixed footer link bar — subtract from visible height when fitting scale (px). */
-const MOBILE_FOOTER_BAR_PX = 32
-
-function computeScale(): number {
-  if (typeof window === "undefined") return 1
-  const w = window.innerWidth
-  const narrow = w <= 480
-  const widthFactor = narrow ? 1 : 0.9
-  const availableW = Math.min(w * widthFactor, MAX_WIDTH)
-
-  const ih = window.innerHeight
-  const vv = window.visualViewport?.height ?? ih
-  const clientH = document.documentElement?.clientHeight ?? ih
-  /*
-   * Production iOS: vv can be smaller than the drawable area when the chrome animates.
-   * Use the largest of vv / innerHeight / clientHeight so the game scales up to fill.
-   */
-  const vhBase = narrow
-    ? Math.max(vv, ih, clientH) * 0.998
-    : Math.max(vv, clientH)
-
-  const availableH = Math.max(
-    200,
-    narrow ? vhBase - MOBILE_FOOTER_BAR_PX : vhBase
-  )
-
+function computeScale(width: number, height: number): number {
+  if (width < 2 || height < 2) return 1
   return Math.min(
-    Math.max(0, availableW / FRAME_WIDTH),
-    Math.max(0, availableH / FRAME_HEIGHT)
+    Math.max(0, width / FRAME_WIDTH),
+    Math.max(0, height / FRAME_HEIGHT)
   )
 }
 
+/**
+ * Scales the fixed design frame (390×960) to fill the parent. Parent should be a
+ * flex child with min-h-0 so height resolves (fullscreen-style layout).
+ */
 export default function ScaleToFit({ children }: { children: React.ReactNode }) {
+  const containerRef = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(1)
 
   useLayoutEffect(() => {
-    const update = () => setScale(computeScale())
+    const el = containerRef.current
+    if (!el) return
+
+    const update = () => {
+      const r = el.getBoundingClientRect()
+      setScale(computeScale(r.width, r.height))
+    }
+
     update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
     window.addEventListener("resize", update)
     window.addEventListener("orientationchange", update)
     if (window.visualViewport) {
@@ -51,6 +40,7 @@ export default function ScaleToFit({ children }: { children: React.ReactNode }) 
       window.visualViewport.addEventListener("scroll", update)
     }
     return () => {
+      ro.disconnect()
       window.removeEventListener("resize", update)
       window.removeEventListener("orientationchange", update)
       if (window.visualViewport) {
@@ -65,28 +55,31 @@ export default function ScaleToFit({ children }: { children: React.ReactNode }) 
 
   return (
     <div
-      style={{
-        width: outerW,
-        height: outerH,
-        overflow: "hidden",
-        position: "relative",
-        flexShrink: 0,
-        marginLeft: "auto",
-        marginRight: "auto",
-      }}
+      ref={containerRef}
+      className="flex h-full w-full min-h-0 items-center justify-center"
     >
       <div
         style={{
-          width: FRAME_WIDTH,
-          height: FRAME_HEIGHT,
-          transform: `scale(${scale})`,
-          transformOrigin: "top left",
-          position: "absolute",
-          left: 0,
-          top: 0,
+          width: outerW,
+          height: outerH,
+          overflow: "hidden",
+          position: "relative",
+          flexShrink: 0,
         }}
       >
-        {children}
+        <div
+          style={{
+            width: FRAME_WIDTH,
+            height: FRAME_HEIGHT,
+            transform: `scale(${scale})`,
+            transformOrigin: "top left",
+            position: "absolute",
+            left: 0,
+            top: 0,
+          }}
+        >
+          {children}
+        </div>
       </div>
     </div>
   )
