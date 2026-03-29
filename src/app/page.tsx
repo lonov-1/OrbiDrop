@@ -23,7 +23,7 @@ function SiteFooterLinks() {
       role="contentinfo"
     >
       <nav
-        className="pointer-events-auto flex w-full max-w-full flex-wrap items-center justify-center gap-x-0.5 gap-y-px border-t border-black/[0.06] bg-white/65 px-2 py-0.5 text-center text-[10px] font-normal leading-tight text-neutral-400 opacity-[0.65] shadow-[0_-1px_8px_rgba(0,0,0,0.04)] backdrop-blur-sm dark:border-white/[0.07] dark:bg-neutral-950/72 dark:text-neutral-500 dark:shadow-[0_-2px_14px_rgba(0,0,0,0.35)]"
+        className="pointer-events-auto flex w-full max-w-full shrink-0 flex-wrap items-center justify-center gap-x-0.5 gap-y-px border-t border-black/[0.06] bg-white/65 px-2 py-1 text-center text-[10px] font-normal leading-tight text-gray-400 opacity-60 shadow-[0_-1px_8px_rgba(0,0,0,0.04)] backdrop-blur-sm dark:border-white/[0.07] dark:bg-neutral-950/72 dark:text-neutral-400 dark:opacity-70 dark:shadow-[0_-2px_14px_rgba(0,0,0,0.35)]"
         aria-label="Site links"
       >
         <Link
@@ -62,18 +62,22 @@ export default function Home() {
   return (
     <main
       className={
-        "orbifall-home-shell box-border flex min-h-[100dvh] flex-col px-2 " +
-        "pt-[max(4px,env(safe-area-inset-top))] " +
+        "orbifall-home-shell box-border flex min-h-[100dvh] flex-col " +
         "pb-[calc(24px+env(safe-area-inset-bottom))]"
       }
     >
       <HomeBodyScroll />
       <h1 className="sr-only">Orbidrop – The Addictive Browser Game</h1>
 
-      <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center">
-        <div className="flex w-full max-w-[420px] flex-col items-center">
-          <div className="aspect-[3/4] max-h-[65vh] w-full min-h-0 max-w-full">
-            <div className="h-full min-h-0 w-full">
+      <div
+        className="shrink-0 px-3 pt-[max(4px,env(safe-area-inset-top))] pb-2"
+        aria-hidden
+      />
+
+      <div className="flex min-h-0 flex-1 flex-col px-2">
+        <div className="flex min-h-0 flex-1">
+          <div className="mx-auto flex h-full min-h-0 w-full max-w-[420px] flex-col">
+            <div className="relative min-h-0 w-full flex-1">
               <ScaleToFit>
                 <GameCanvasLoader />
               </ScaleToFit>

@@ -26,7 +26,7 @@ function computeScale(width: number, height: number): number {
 }
 
 /**
- * Scales the fixed design frame (390×960) to fill the parent. Parent should be a
+ * Scales the fixed design frame (390×FRAME_HEIGHT) to fit the parent. Parent should be a
  * flex child with min-h-0 so height resolves (fullscreen-style layout).
  */
 export default function ScaleToFit({ children }: { children: React.ReactNode }) {
@@ -69,7 +69,7 @@ export default function ScaleToFit({ children }: { children: React.ReactNode }) 
   return (
     <div
       ref={containerRef}
-      className="flex h-full max-h-full w-full min-h-0 items-center justify-center"
+      className="flex h-full max-h-full w-full min-h-0 flex-col items-center justify-start"
     >
       <div
         style={{

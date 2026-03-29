@@ -2764,7 +2764,7 @@ const revealStyle = gameFinished
 
     <div
       ref={shakeRef}
-      className="flex w-full max-w-[420px] flex-col items-center max-[480px]:px-0.5"
+      className="flex min-h-0 w-full max-w-[420px] flex-col items-center max-[480px]:px-0.5"
       style={{
         position:"relative",
         zIndex:0,
@@ -3520,7 +3520,7 @@ const revealStyle = gameFinished
 
       </div>
 
-      <div className="mt-3 flex w-full shrink-0 justify-center px-1">
+      <div className="mt-3 flex w-full shrink-0 justify-center px-1 pb-0.5">
       <button
         className={showDropPulse ? "orbifall-drop-btn-pulse" : undefined}
         onClick={() => {
