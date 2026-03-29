@@ -111,7 +111,6 @@ const EARTH_TEXTURE_DATA_URI =
   )
 
 const EARTH_DROP_KEY_PREFIX = "orbifallEarthDrop:"
-const ORBIFALL_HOME_SCREEN_PROMPT_KEY = "orbifallHomeScreenPromptDismissed"
 const BALL_TEXTURE_SIZE = 100
 
 function makeBallTextureUri(baseColor: string, brightnessDelta: number) {
@@ -487,27 +486,24 @@ function diffToFeedback(diff: number) {
 
 /** Stat row Diff value: green ≤5, orange ≤20, red above (uses absolute diff). */
 function diffStatDisplayColor(absDiff: number) {
-  if (absDiff <= 5) return "#16a34a"
-  if (absDiff <= 20) return "#ea580c"
-  return "#dc2626"
+  if (absDiff <= 5) return "#10b981"
+  if (absDiff <= 20) return "#f97316"
+  return "#ef4444"
 }
 
 function diffToColor(diff: number) {
-  // "Very close" should read as green up to diff <= 3.
-  if (diff === 0) return "#16a34a"
-  if (diff <= 3) return "#2a9d8f"
-  // Medium: yellow/orange band.
-  if (diff <= 6) return "#e9c46a"
-  if (diff <= 10) return "#f4a261"
-  return "#e63946"
+  if (diff === 0) return "#10b981" /* emerald-500 */
+  if (diff <= 3) return "#14b8a6" /* teal-500 */
+  if (diff <= 6) return "#eab308" /* yellow-500 */
+  if (diff <= 10) return "#f97316" /* orange-500 */
+  return "#ef4444" /* red-500 */
 }
 
 function bestDiffToColor(diff: number) {
-  // Distinct palette for the Best box (feels "achievements" oriented)
-  if (diff <= 3) return "#16a34a"
-  if (diff <= 6) return "#2a9d8f"
-  if (diff <= 10) return "#457b9d"
-  return "#e63946"
+  if (diff <= 3) return "#10b981"
+  if (diff <= 6) return "#14b8a6"
+  if (diff <= 10) return "#0ea5e9"
+  return "#ef4444"
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -599,8 +595,6 @@ export default function GameCanvas() {
   const [showFeedback, setShowFeedback] = useState(false)
   const [idleJarAtmosphere, setIdleJarAtmosphere] = useState(false)
   const [jarShakeActive, setJarShakeActive] = useState(false)
-  const [homeScreenPromptDismissed, setHomeScreenPromptDismissed] = useState(false)
-  const [homeScreenPromptReady, setHomeScreenPromptReady] = useState(false)
   const [statsPopUpReady, setStatsPopUpReady] = useState(false)
   const [rulesPopUpReady, setRulesPopUpReady] = useState(false)
   const [isSmallScreen, setIsSmallScreen] = useState(false)
@@ -692,11 +686,6 @@ export default function GameCanvas() {
 
     run()
   }
-
-  useEffect(() => {
-    setHomeScreenPromptDismissed(getStorageItem(ORBIFALL_HOME_SCREEN_PROMPT_KEY) === "true")
-    setHomeScreenPromptReady(true)
-  }, [])
 
   useEffect(() => {
     try {
@@ -2697,7 +2686,7 @@ const revealStyle = gameFinished
   const finishedDiffColor =
     finishedDiff === null ? theme.text : diffToColor(finishedDiff)
   const hasBestNumber = bestDiff !== null
-  const bestNumberColor = hasBestNumber ? bestDiffToColor(bestDiff as number) : "#16a34a"
+  const bestNumberColor = hasBestNumber ? bestDiffToColor(bestDiff as number) : "#10b981"
 
   // STOP moment feedback (near-miss + perfect)
   const stopIsPerfect = stopDiff !== null && stopDiff === 0
@@ -2745,6 +2734,17 @@ const revealStyle = gameFinished
 
   const showDropPulse =
     !running && !gameOver && !isCounting && !isStopping
+
+  const dropButtonClassName =
+    "w-full max-w-full rounded-2xl py-4 text-base font-semibold shadow-lg transition duration-200 ease-out will-change-transform touch-manipulation " +
+    (isCounting || isStopping
+      ? "cursor-default bg-gradient-to-r from-slate-400 to-slate-600 text-white/90 active:scale-100 "
+      : gameOver
+        ? "bg-gradient-to-r from-teal-400 to-teal-600 text-white active:scale-[0.97] hover:brightness-[1.03] "
+        : running
+          ? "bg-gradient-to-r from-rose-400 to-red-600 text-white active:scale-[0.97] hover:brightness-[1.03] "
+          : "bg-gradient-to-r from-teal-400 to-teal-600 text-white active:scale-[0.97] hover:brightness-[1.03] ") +
+    (showDropPulse ? "orbifall-drop-btn-pulse " : "")
 
   const diffStatAbs =
     diffRevealVisible && gameFinished
@@ -2806,18 +2806,15 @@ const revealStyle = gameFinished
        }}
      />
 
-      {/* Unified top control panel — dense column, capped width (centered) */}
+      {/* Top chrome — compact app-style header */}
       <div
         className={
-          "mx-auto mb-1 flex w-full max-w-md flex-col gap-1.5 rounded-2xl border p-2 max-[480px]:mb-0 max-[480px]:gap-0.5 max-[480px]:rounded-lg max-[480px]:px-1 max-[480px]:py-1 sm:mb-1.5 sm:gap-2 sm:p-2.5 " +
-          (darkMode
-            ? "border-white/[0.07] bg-[rgba(34,34,36,0.94)] shadow-[0_4px_20px_rgba(0,0,0,0.26),inset_0_1px_0_rgba(255,255,255,0.05)]"
-            : "border-black/[0.055] bg-white/[0.96] shadow-[0_4px_18px_rgba(0,0,0,0.06),inset_0_1px_0_rgba(255,255,255,0.88)]")
+          "mx-auto mb-1 flex w-full max-w-md flex-col gap-2 rounded-xl border border-black/[0.06] bg-white/80 p-2 shadow-sm backdrop-blur-md max-[480px]:mb-0 max-[480px]:gap-1.5 max-[480px]:p-1.5 dark:border-white/[0.08] dark:bg-neutral-900/80 sm:mb-1.5 sm:gap-2 sm:p-2.5"
         }
       >
         {/* Header: title + streak/actions on one row */}
         <div
-          className="flex min-h-[24px] max-[480px]:min-h-[20px] items-center justify-between gap-1.5 text-[13px] font-semibold leading-none max-[480px]:gap-1 max-[480px]:text-[12px] sm:min-h-[26px] sm:gap-2 sm:text-sm"
+          className="flex min-h-[24px] max-h-[80px] max-[480px]:min-h-[20px] items-center justify-between gap-1.5 text-[13px] font-semibold leading-none max-[480px]:gap-1 max-[480px]:text-[12px] sm:min-h-[26px] sm:gap-2 sm:text-sm"
           style={{ color: theme.text }}
         >
           <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
@@ -2904,10 +2901,7 @@ const revealStyle = gameFinished
         {/* Target (primary) + Rounds (secondary) — full-width pill, tight vertical rhythm */}
         <div
           className={
-            "w-full rounded-xl border px-1.5 py-1.5 sm:px-2 sm:py-1.5 " +
-            (darkMode
-              ? "border-white/10 bg-black/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-              : "border-black/[0.06] bg-black/[0.025] shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]")
+            "w-full rounded-xl border border-black/[0.06] bg-white/90 px-1.5 py-1.5 shadow-sm sm:px-2 sm:py-1.5 dark:border-white/10 dark:bg-black/25"
           }
         >
           <div className="flex w-full flex-col items-center gap-0.5">
@@ -2966,13 +2960,14 @@ const revealStyle = gameFinished
               <span className="flex min-w-0 shrink-0 items-baseline gap-2">
                 <span
                   className={
-                    "text-[0.72em] font-semibold leading-none " +
-                    (darkMode ? "text-neutral-400" : "text-neutral-500")
+                    "text-[0.72em] font-medium leading-none text-gray-500 dark:text-neutral-400"
                   }
                 >
                   Target
                 </span>
-                <span className="tabular-nums leading-none">{target}</span>
+                <span className="font-semibold tabular-nums leading-none text-gray-900 dark:text-neutral-100">
+                  {target}
+                </span>
               </span>
             </div>
 
@@ -3069,18 +3064,13 @@ const revealStyle = gameFinished
         "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
     }}
   >
-    <div
-      className="text-[10px] leading-none max-[480px]:text-[9px] sm:text-[11px]"
-      style={{ color: theme.muted2 }}
-    >
+    <div className="text-[10px] font-medium leading-none text-gray-500 max-[480px]:text-[9px] dark:text-neutral-400 sm:text-[11px]">
       Result
     </div>
     <div
       ref={resultValueRef}
-      className="text-[14px] sm:text-[15px]"
+      className="text-base font-semibold tabular-nums leading-none sm:text-[17px]"
       style={{
-        fontWeight:"600",
-        lineHeight:1,
         color: hasResultNumbers
           ? isCounting
             ? countingDiffColor
@@ -3130,18 +3120,13 @@ const revealStyle = gameFinished
         "transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease"
     }}
   >
-    <div
-      className="text-[10px] leading-none max-[480px]:text-[9px] sm:text-[11px]"
-      style={{ color: theme.muted2 }}
-    >
+    <div className="text-[10px] font-medium leading-none text-gray-500 max-[480px]:text-[9px] dark:text-neutral-400 sm:text-[11px]">
       Diff
     </div>
     <div
       ref={diffValueRef}
-      className="text-[14px] sm:text-[15px]"
+      className="text-base font-semibold tabular-nums leading-none sm:text-[17px]"
       style={{
-        fontWeight:"600",
-        lineHeight:1,
         color:
           diffStatAbs !== null
             ? diffStatDisplayColor(diffStatAbs)
@@ -3171,17 +3156,12 @@ const revealStyle = gameFinished
         "background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease"
     }}
   >
-    <div
-      className="text-[10px] leading-none max-[480px]:text-[9px] sm:text-[11px]"
-      style={{ color: theme.muted2 }}
-    >
+    <div className="text-[10px] font-medium leading-none text-gray-500 max-[480px]:text-[9px] dark:text-neutral-400 sm:text-[11px]">
       Best
     </div>
     <div
-      className="text-[14px] sm:text-[15px]"
+      className="text-base font-semibold tabular-nums leading-none sm:text-[17px]"
       style={{
-        fontWeight:"600",
-        lineHeight:1,
         color: hasBestNumber
           ? bestNumberColor
           : undefined,
@@ -3411,22 +3391,14 @@ const revealStyle = gameFinished
 
         <div
           aria-hidden="true"
+          className="orbifall-target-watermark pointer-events-none absolute left-1/2 z-0"
           style={{
-            position: "absolute",
             top: "28%",
-            left: "50%",
-            transform: `translate(-50%, -50%) scale(${
-              running && !isCounting ? 1.03 : 1
-            })`,
             fontSize: isCompact ? "118px" : "138px",
-            fontWeight: "800",
             color: theme.feedbackText,
-            opacity: 0.06,
             textShadow: "none",
             letterSpacing: "-0.02em",
-            filter: "blur(0.45px)",
-            pointerEvents: "none",
-            transition: "transform 200ms ease, opacity 200ms ease"
+            filter: "blur(0.45px)"
           }}
         >
           {target}
@@ -3520,9 +3492,9 @@ const revealStyle = gameFinished
 
       </div>
 
-      <div className="mt-3 flex w-full shrink-0 justify-center px-1 pb-0.5">
+      <div className="mt-2 flex w-full shrink-0 justify-center px-0.5">
       <button
-        className={showDropPulse ? "orbifall-drop-btn-pulse" : undefined}
+        className={dropButtonClassName}
         onClick={() => {
           triggerActionButtonFeedback()
       if (gameOver) {
@@ -3553,44 +3525,12 @@ const revealStyle = gameFinished
         }}
         disabled={isCounting || isStopping}
         style={{
-          marginTop: 0,
-          width: "min(85vw, 320px)",
-          maxWidth: 320,
-          padding: isCompact ? "10px 18px" : "14px 24px",
-          fontSize: gameOver ? (isCompact ? 15 : 17) : 20,
-          lineHeight: gameOver ? 1.2 : undefined,
-          fontWeight: 700,
-          border:"none",
-          borderRadius:"10px",
-          color: isCounting || isStopping ? "#ddd" : "white",
-          // Subtle highlight overlay + state color gradient.
-          backgroundImage: isCounting || isStopping
-            ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #8b939b 0%, #6c757d 100%)"
-            : gameOver
-            ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #39b2a2 0%, #2a9d8f 100%)"
-            : running
-            ? "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #ef5a66 0%, #e63946 100%)"
-            : "linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.08) 38%, rgba(255,255,255,0) 62%), linear-gradient(180deg, #39b2a2 0%, #2a9d8f 100%)",
-          cursor: isCounting || isStopping ? "default" : "pointer",
-          minHeight: 64,
-          touchAction:"manipulation",
-          willChange:"transform, box-shadow, filter",
+          border: "none",
           transform: actionButtonPressed
-            ? "translateY(2px) scale(0.97)"
-            : actionButtonHovered
-            ? "translateY(-1px) scale(1.015)"
-            : "scale(1)",
-          filter: actionButtonPressed ? "brightness(0.96)" : actionButtonHovered ? "brightness(1.03)" : "brightness(1)",
-          boxShadow: actionButtonPressed
-            ? "0 2px 6px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.18)"
-            : actionButtonHovered
-            ? "0 16px 40px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.30)"
-            : showDropPulse
-            ? undefined
-            : "0 14px 34px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.22)",
-          transition: showDropPulse
-            ? "transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 120ms ease"
-            : "transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 120ms ease, filter 120ms ease"
+            ? "scale(0.97)"
+            : actionButtonHovered && !isCounting && !isStopping
+              ? "scale(1.01)"
+              : undefined,
         }}
       >
         {gameOver
@@ -3787,56 +3727,6 @@ const revealStyle = gameFinished
             <p style={{marginTop:"16px",fontSize:"14px",color: theme.modalMuted,fontWeight:"bold"}}>
               New challenge in {timeLeft}
             </p>
-
-            {stats.played === 1 &&
-              homeScreenPromptReady &&
-              !homeScreenPromptDismissed && (
-                <div
-                  role="status"
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 8,
-                    marginTop: 16,
-                    paddingTop: 14,
-                    borderTop: `1px solid ${theme.border}`,
-                    fontSize: 13,
-                    lineHeight: 1.35,
-                    color: theme.modalMuted,
-                    textAlign: "left"
-                  }}
-                >
-                  <span style={{ minWidth: 0, flex: 1 }}>
-                    Play daily — add Orbidrop to your home screen
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Dismiss home screen tip"
-                    onClick={() => {
-                      setStorageItem(ORBIFALL_HOME_SCREEN_PROMPT_KEY, "true")
-                      setHomeScreenPromptDismissed(true)
-                    }}
-                    style={{
-                      flexShrink: 0,
-                      width: 28,
-                      height: 28,
-                      marginTop: -4,
-                      border: "none",
-                      borderRadius: 8,
-                      background: darkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
-                      color: theme.modalText,
-                      cursor: "pointer",
-                      fontSize: 14,
-                      lineHeight: 1,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center"
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
-              )}
 
           </div>
 
@@ -4048,40 +3938,23 @@ const revealStyle = gameFinished
       {typeof document !== "undefined" &&
         createPortal(
           <div
-            style={{
-              position: "fixed",
-              right: isSmallScreen
-                ? "calc(10px + env(safe-area-inset-right))"
-                : "calc(14px + env(safe-area-inset-right))",
-              bottom: isSmallScreen
-                ? "calc(52px + env(safe-area-inset-bottom))"
-                : "calc(26px + env(safe-area-inset-bottom))",
-              display: "flex",
-              gap: "6px",
-              alignItems: "center",
-              zIndex: 2500,
-              padding: "0 env(safe-area-inset-right) env(safe-area-inset-bottom) 0"
-            }}
+            className={
+              "fixed z-[2500] flex gap-2 opacity-80 " +
+              (isSmallScreen
+                ? "bottom-[calc(3rem+env(safe-area-inset-bottom))] right-3"
+                : "bottom-6 right-6")
+            }
           >
             <button
               type="button"
               onClick={() => setDarkMode(prev => !prev)}
               aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+              className="flex size-7 items-center justify-center rounded-full border-0 text-[11px] shadow-sm transition hover:opacity-100 sm:size-8 sm:text-xs"
               style={{
-                width: isSmallScreen ? "28px" : "34px",
-                height: isSmallScreen ? "28px" : "34px",
-                borderRadius: "999px",
-                border: "none",
                 background: darkMode
                   ? hexToRgba("#374151", 0.72)
                   : hexToRgba(theme.buttonMuted, 0.78),
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: isSmallScreen ? "12px" : "13px",
-                cursor: "pointer",
-                color: darkMode ? "rgba(229, 229, 229, 0.92)" : theme.muted,
-                boxShadow: "0 3px 10px rgba(0,0,0,0.12)"
+                color: darkMode ? "rgba(229, 229, 229, 0.92)" : theme.muted
               }}
             >
               {darkMode ? "☀️" : "🌙"}
@@ -4099,21 +3972,12 @@ const revealStyle = gameFinished
                   ? "Turn sound effects off"
                   : "Turn sound effects on"
               }
+              className="flex size-7 items-center justify-center rounded-full border-0 text-[11px] shadow-sm transition hover:opacity-100 sm:size-8 sm:text-xs"
               style={{
-                width: isSmallScreen ? "28px" : "34px",
-                height: isSmallScreen ? "28px" : "34px",
-                borderRadius: "999px",
-                border: "none",
                 background: soundEnabled
                   ? hexToRgba("#2a9d8f", 0.82)
                   : hexToRgba(theme.buttonMuted, 0.78),
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: isSmallScreen ? "12px" : "13px",
-                cursor: "pointer",
                 color: soundEnabled ? "rgba(255,255,255,0.94)" : theme.muted,
-                boxShadow: "0 3px 10px rgba(0,0,0,0.12)",
                 touchAction: "manipulation",
                 WebkitTapHighlightColor: "transparent"
               }}

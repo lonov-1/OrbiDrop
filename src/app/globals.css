@@ -123,6 +123,17 @@ body.orbifall-home-scroll {
   }
 }
 
+/* Home: flat app canvas (main provides bg-neutral-50 / dark:bg-neutral-950) */
+html:has(.orbifall-home-shell),
+body:has(.orbifall-home-shell) {
+  background-color: #fafafa !important;
+}
+
+[data-theme="dark"] html:has(.orbifall-home-shell),
+[data-theme="dark"] body:has(.orbifall-home-shell) {
+  background-color: #0a0a0a !important;
+}
+
 /* Top game UI — subtle motion (premium, not loud) */
 @keyframes orbifall-target-live {
   0%,
@@ -153,20 +164,41 @@ body.orbifall-home-scroll {
   animation: orbifall-attempt-pulse 2s ease-in-out infinite;
 }
 
-@keyframes dropPulse {
+/* Primary CTA idle: subtle shadow breathe (no transform — avoids clash with press scale) */
+@keyframes orbifall-cta-breathe {
   0%,
   100% {
-    box-shadow: 0 4px 20px rgba(26, 158, 143, 0.3);
+    box-shadow:
+      0 10px 25px -5px rgba(45, 212, 191, 0.22),
+      0 4px 10px -4px rgba(0, 0, 0, 0.12);
   }
   50% {
     box-shadow:
-      0 4px 40px rgba(26, 158, 143, 0.6),
-      0 0 0 8px rgba(26, 158, 143, 0.1);
+      0 14px 32px -6px rgba(45, 212, 191, 0.32),
+      0 6px 14px -5px rgba(0, 0, 0, 0.14);
   }
 }
 
 .orbifall-drop-btn-pulse {
-  animation: dropPulse 2s ease-in-out infinite;
+  animation: orbifall-cta-breathe 2s ease-in-out infinite;
+}
+
+/* Large target watermark behind jar — hierarchy + subtle pulse */
+@keyframes orbifall-target-watermark-pulse {
+  0%,
+  100% {
+    opacity: 0.12;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    opacity: 0.15;
+    transform: translate(-50%, -50%) scale(1.02);
+  }
+}
+
+.orbifall-target-watermark {
+  animation: orbifall-target-watermark-pulse 3.2s ease-in-out infinite;
+  font-weight: 600;
 }
 
 @keyframes orbifall-jar-idle-breathe {
@@ -211,6 +243,7 @@ body.orbifall-home-scroll {
   .orbifall-target--live,
   .orbifall-attempt--live,
   .orbifall-drop-btn-pulse,
+  .orbifall-target-watermark,
   .orbifall-jar-idle-breathe,
   .orbifall-jar-shake-once {
     animation: none;
