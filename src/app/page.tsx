@@ -36,7 +36,7 @@ function SiteFooterLinks() {
 
 export default function Home() {
   return (
-    <main className="orbifall-main orbifall-home">
+    <main className="orbifall-home-shell">
       <h1 className="sr-only">Orbidrop – The Addictive Browser Game</h1>
 
       <div className="flex w-full max-w-[100vw] flex-col items-center px-1.5 sm:px-3">

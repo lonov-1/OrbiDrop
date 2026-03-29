@@ -6,41 +6,54 @@ const FRAME_WIDTH = 390
 const FRAME_HEIGHT = 960
 const MAX_WIDTH = 430
 
+/** Fixed footer link bar — subtract from visible height when fitting scale (px). */
+const MOBILE_FOOTER_BAR_PX = 46
+
+function computeScale(): number {
+  if (typeof window === "undefined") return 1
+  const w = window.innerWidth
+  const narrow = w <= 480
+  const widthFactor = narrow ? 1 : 0.9
+  const availableW = Math.min(w * widthFactor, MAX_WIDTH)
+
+  const ih = window.innerHeight
+  const vv = window.visualViewport?.height ?? ih
+  const clientH = document.documentElement?.clientHeight ?? ih
+  /*
+   * Production iOS: vv can be smaller than the drawable area when the chrome animates.
+   * Use the largest of vv / innerHeight / clientHeight so the game scales up to fill.
+   */
+  const vhBase = narrow
+    ? Math.max(vv, ih, clientH) * 0.998
+    : Math.max(vv, clientH)
+
+  const availableH = Math.max(
+    200,
+    narrow ? vhBase - MOBILE_FOOTER_BAR_PX : vhBase
+  )
+
+  return Math.min(
+    Math.max(0, availableW / FRAME_WIDTH),
+    Math.max(0, availableH / FRAME_HEIGHT)
+  )
+}
+
 export default function ScaleToFit({ children }: { children: React.ReactNode }) {
   const [scale, setScale] = useState(1)
 
   useLayoutEffect(() => {
-    const update = () => {
-      const w = typeof window !== "undefined" ? window.innerWidth : FRAME_WIDTH
-      const narrow = w <= 480
-      // Use almost full width on phones; MAX_WIDTH allows full-bleed on wide iPhones.
-      const widthFactor = narrow ? 0.98 : 0.9
-      /*
-       * Light reserve: footer is position:fixed and does not consume flow height.
-       * We only shave a few px so the scaled block does not sit under the OS home indicator.
-       */
-      const footerReservePx = narrow ? 28 : 0
-      const availableW = Math.min(w * widthFactor, MAX_WIDTH)
-      const vh =
-        typeof window === "undefined"
-          ? FRAME_HEIGHT
-          : window.visualViewport?.height ?? window.innerHeight
-      const availableH = Math.max(200, vh - footerReservePx)
-      const s = Math.min(
-        Math.max(0, availableW / FRAME_WIDTH),
-        Math.max(0, availableH / FRAME_HEIGHT)
-      )
-      setScale(s)
-    }
+    const update = () => setScale(computeScale())
     update()
     window.addEventListener("resize", update)
-    if (typeof window !== "undefined" && window.visualViewport) {
+    window.addEventListener("orientationchange", update)
+    if (window.visualViewport) {
       window.visualViewport.addEventListener("resize", update)
       window.visualViewport.addEventListener("scroll", update)
     }
     return () => {
       window.removeEventListener("resize", update)
-      if (typeof window !== "undefined" && window.visualViewport) {
+      window.removeEventListener("orientationchange", update)
+      if (window.visualViewport) {
         window.visualViewport.removeEventListener("resize", update)
         window.visualViewport.removeEventListener("scroll", update)
       }
