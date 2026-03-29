@@ -246,9 +246,11 @@ export async function POST(req: Request) {
       }
 
       if (updated?.attempts_used === next) {
+        // Successful reserve. Client treats limitReached as "POST did not reserve" (4th DROP).
+        // The 3rd DROP also sets next === MAX_ATTEMPTS; it must still start the round.
         const res = NextResponse.json({
           attemptsUsed: next,
-          limitReached: next >= MAX_ATTEMPTS
+          limitReached: false
         })
         return applyOrbifallPlayerCookie(res, playerId, isNew)
       }
